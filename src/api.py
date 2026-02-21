@@ -14,6 +14,7 @@ from .supervisor import build_supervisor
 from .shared_services.conversation_store import ConversationStore, InMemoryConversationStore
 from .graphql.conversation_schema import Query as GraphQLQuery
 from .agent_ops import CircuitBreaker, get_agent_ops_health
+from .hitl.ticket import get_pending_escalations, clear_pending_escalation
 
 # --- App setup ---
 
@@ -42,6 +43,21 @@ def get_graphql_context(request=None):
 
 graphql_app = GraphQLRouter(graphql_schema, context_getter=get_graphql_context)
 app.include_router(graphql_app, prefix="/graphql")
+
+
+# --- HITL (human-in-the-loop) endpoints ---
+
+@app.get("/hitl/pending")
+def hitl_pending():
+    """Return pending escalations (sessions waiting for a human). Populated when HITL_HANDLER=ticket."""
+    return get_pending_escalations()
+
+
+@app.post("/hitl/pending/{session_id}/clear")
+def hitl_clear(session_id: str):
+    """Mark a session as picked up by a human (remove from pending list)."""
+    clear_pending_escalation(session_id)
+    return {"session_id": session_id, "cleared": True}
 
 
 # --- Request / Response models ---

@@ -20,8 +20,11 @@ python main.py
 
 ## API
 
-- **GET /health** — Health check
+- **GET /health** — Health check (when AgentOps enabled: agent circuit states, MCP status)
 - **POST /chat** — Send a message, get a reply
+- **GET /graphql** — GraphQL for conversation history (e.g. `conversation(session_id, limit)`, `sessions(limit)`)
+- **GET /hitl/pending** — Pending escalations (sessions waiting for a human; when `HITL_HANDLER=ticket`)
+- **POST /hitl/pending/{session_id}/clear** — Mark a session as picked up by a human
 
 ### Chat Request
 
@@ -47,11 +50,13 @@ python main.py
 
 ```
 src/
-├── api.py              # FastAPI entrypoint (chat endpoint)
+├── api.py              # FastAPI entrypoint (chat, health, graphql, hitl/pending)
 ├── config.py           # Configuration
 ├── router.py           # Session router (intent → agent pools)
 ├── registry.py         # Agent registry
 ├── supervisor.py       # LangGraph supervisor graph
+├── agent_ops/          # Circuit breaker, health (optional)
+├── hitl/               # Human-in-the-loop: escalation handlers (stub, ticket, email)
 ├── agents/             # Agent pool subgraphs (Support, Billing)
 │   ├── support.py
 │   └── billing.py
@@ -89,6 +94,10 @@ Default: **keyword-based** mapping. Set `USE_TF_INTENT=true` and install `tensor
 - **escalation** — human, agent, escalate, speak to someone
 - **support** — default
 
+## HITL (human-in-the-loop)
+
+When the supervisor escalates (low faithfulness score or agent-requested), the **escalate** node calls a HITL handler so the system can create tickets or notify humans. Module: `src/hitl/` (stub, ticket, email handlers). Config: `HITL_ENABLED` (default true), `HITL_HANDLER` (stub \| ticket \| email; default ticket), `HITL_EMAIL_TO`. With `HITL_HANDLER=ticket`, **GET /hitl/pending** lists pending escalations; **POST /hitl/pending/{session_id}/clear** marks a session as picked up. See `ARCHITECTURE_DESIGN.md` and `CODE_WALKTHROUGH.md` §3.20.
+
 **Infra:** Docker and Kubernetes assets are in `infra/` (Dockerfile, namespace, deployment, service, HPA, scripts). See `infra/README.md`.
 
-Replace router and RAG stubs with Weaviate in production (set `WEAVIATE_URL` and optionally use `WeaviateRAGService`). **Intent router:** default is keyword-based; set `USE_TF_INTENT=true` (and install `tensorflow`) to use a small Keras intent classifier. **Faithfulness scoring:** set `USE_TF_FAITHFULNESS=true` to use a TensorFlow-trained model (response vs RAG context) in the supervisor aggregate; if score &lt; threshold, escalates. Env: `OPENAI_API_KEY`, `MCP_SERVER_URL` (required); `DEFAULT_MODEL`, `TOP_P`, `GUARDRAILS_ENABLED`, `WEAVIATE_*`, `USE_TF_INTENT`, `TF_INTENT_MODEL_PATH`, `USE_TF_FAITHFULNESS`, `TF_FAITHFULNESS_MODEL_PATH` (optional).
+Replace router and RAG stubs with Weaviate in production (set `WEAVIATE_URL` and optionally use `WeaviateRAGService`). **Intent router:** default is keyword-based; set `USE_TF_INTENT=true` (and install `tensorflow`) to use a small Keras intent classifier. **Faithfulness scoring:** set `USE_TF_FAITHFULNESS=true` to use a TensorFlow-trained model (response vs RAG context) in the supervisor aggregate; if score &lt; threshold, escalates to HITL. **HITL:** `HITL_ENABLED`, `HITL_HANDLER` (stub \| ticket \| email), `HITL_EMAIL_TO`. Env: `OPENAI_API_KEY`, `MCP_SERVER_URL` (required); `DEFAULT_MODEL`, `TOP_P`, `GUARDRAILS_ENABLED`, `WEAVIATE_*`, `USE_TF_INTENT`, `TF_INTENT_MODEL_PATH`, `USE_TF_FAITHFULNESS`, `TF_FAITHFULNESS_MODEL_PATH`, `HITL_*` (optional).

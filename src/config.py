@@ -39,5 +39,10 @@ class Config:
     use_react: bool = os.getenv("USE_REACT", "false").lower() in ("true", "1", "yes")
     react_max_steps: int = int(os.getenv("REACT_MAX_STEPS", "10"))
 
+    # Human-in-the-loop (HITL): when we escalate, create ticket / notify
+    hitl_enabled: bool = os.getenv("HITL_ENABLED", "true").lower() in ("true", "1", "yes")
+    hitl_handler: str = os.getenv("HITL_HANDLER", "ticket").strip().lower() or "stub"  # stub | ticket | email
+    hitl_email_to: str = os.getenv("HITL_EMAIL_TO", "").strip()
+
 
 config = Config()

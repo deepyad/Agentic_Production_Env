@@ -32,6 +32,7 @@ class SupervisorState(TypedDict, total=False):
     planned_agent_ids: list[str]
     metadata: dict[str, Any]
     needs_escalation: bool
+    escalation_reason: str
     resolved: bool
     last_rag_context: str
 
@@ -157,15 +158,36 @@ def create_supervisor_graph(
             faith = scorer.score(response_text, context)
             if faith < config.hallucination_threshold_faithfulness:
                 out["needs_escalation"] = True
+                out["escalation_reason"] = "low_faithfulness"
         return out
 
+    _hitl = hitl_handler if hitl_handler is not None else get_hitl_handler(
+        handler_name=getattr(config, "hitl_handler", "stub"),
+        enabled=getattr(config, "hitl_enabled", True),
+        email_to=getattr(config, "hitl_email_to", ""),
+    )
+
     def escalate_node(state: dict[str, Any]) -> dict[str, Any]:
-        """Handle escalation: route to human or escalation agent."""
+        """Handle escalation: call HITL (ticket/email) then return message to user."""
+        messages = state.get("messages", [])
+        last_human = next((m for m in reversed(messages) if hasattr(m, "type") and m.type == "human"), None)
+        last_ai = next((m for m in reversed(messages) if hasattr(m, "type") and m.type == "ai"), None)
+        reason = state.get("escalation_reason") or "agent_requested"
+        ctx = EscalationContext(
+            session_id=state.get("session_id", ""),
+            user_id=state.get("user_id", ""),
+            reason=reason,
+            last_user_message=getattr(last_human, "content", None) if last_human else None,
+            last_agent_message=getattr(last_ai, "content", None) if last_ai else None,
+            metadata=state.get("metadata"),
+        )
+        try:
+            _hitl.on_escalate(ctx)
+        except Exception:
+            pass
         return {
             "messages": [
-                AIMessage(
-                    content="I'm connecting you with a human agent. Please hold."
-                )
+                AIMessage(content="I'm connecting you with a human agent. Please hold.")
             ],
         }
 

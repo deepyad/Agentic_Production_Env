@@ -179,7 +179,7 @@ flowchart TB
     BP <-->|tool calls| ToolsMCP
 ```
 
-**AgentOps:** Dispatch passes through circuit breaker (skip open circuits); on failure, failover to fallback agent. Health: `GET /health` reports agent and MCP status (§5.4.1). Planning and ReAct are not implemented; see §5.3 (Optional agent patterns) for where they could be added.
+**AgentOps:** Dispatch passes through circuit breaker (skip open circuits); on failure, failover to fallback agent. Health: `GET /health` reports agent and MCP status (§5.4.1). **Planning** and **ReAct** are implemented and optional: enable with `USE_PLANNING` and `USE_REACT`; see §5.3 (Optional agent patterns).
 
 ---
 
@@ -376,6 +376,28 @@ This deployment view complements the logical flow (Section 2) and request sequen
   - **State:** `messages`, `current_agent`, `session_id`, `user_id`, `last_rag_context`, `metadata` (e.g., escalation flag, resolved intents).
   - **Nodes:** `route` (uses router suggestion or LLM to pick agent), `invoke_agent` (calls the chosen pool; agents return `last_rag_context`), `aggregate` (runs **FaithfulnessScorer** on response + last_rag_context; if score &lt; threshold sets needs_escalation), `escalate` (optional).
   - **Edges:** Conditional from `route` to agent nodes; from each agent back to `aggregate`; optional `aggregate` → `route` for next turn.
+
+**FaithfulnessScorer(response, last_rag_context) — how it works**
+
+- **What is passed:** After an agent runs, the **invoke_agent** node puts the agent’s reply into `messages` and the agent’s **RAG doc context** (the retrieved chunks used to answer) into state as **`last_rag_context`**. The **aggregate** node then takes (1) **response** = text of the last AI message in state, and (2) **context** = `state["last_rag_context"]`.
+- **What the scorer does:** **FaithfulnessScorer.score(response, context)** returns a float in [0, 1]: how well the response is grounded in the context (high = faithful, low = possible hallucination or contradiction). Default implementation is **StubFaithfulnessScorer** (always 1.0). With **USE_TF_FAITHFULNESS=true**, **TFFaithfulnessScorer** uses a small TensorFlow model (or trains from synthetic data) to score the pair; see CODE_WALKTHROUGH §3.16 for input format and training.
+- **How the result is used:** If `score < config.hallucination_threshold_faithfulness` (default 0.8), the aggregate node sets **needs_escalation=True**. The graph then follows the **escalate** edge (e.g. “Connecting you with a human agent”) instead of returning the reply to the user. So low faithfulness triggers escalation rather than showing a possibly hallucinated answer.
+
+**Human-in-the-loop (HITL) — implemented**
+
+When the graph follows the **escalate** edge (low faithfulness or agent-requested escalation), the **escalate** node delegates to a **HITL handler** so the system can create tickets, send notifications, or enqueue for humans. Implemented in a separate module **`src/hitl/`**:
+
+| Component | Role |
+|-----------|------|
+| **HitlHandler** (base) | Abstract interface: `on_escalate(ctx: EscalationContext)`. `EscalationContext` holds `session_id`, `user_id`, `reason` (e.g. `low_faithfulness`, `agent_requested`), `last_user_message`, `last_agent_message`, `metadata`. |
+| **StubHitlHandler** | No-op; used when HITL is disabled or for testing. |
+| **TicketHitlHandler** | Calls `create_support_ticket` (support tools) to create a ticket; keeps a **pending escalations** map (session_id → ticket info). Exposes `get_pending_escalations()` and `clear_pending_escalation(session_id)` for dashboards or human queues. |
+| **EmailNotifyHitlHandler** | Logs escalation; optional `email_to` (SMTP not implemented). |
+
+**Config:** `HITL_ENABLED` (default true), `HITL_HANDLER` (`stub` \| `ticket` \| `email`; default `ticket`), `HITL_EMAIL_TO` (for email handler). The supervisor builds the handler via `get_hitl_handler(config.hitl_handler, config.hitl_enabled, config.hitl_email_to)` and passes it into the graph; **escalate_node** builds `EscalationContext` from state and calls `handler.on_escalate(ctx)` (in try/except), then returns the same AIMessage: "I'm connecting you with a human agent. Please hold."
+
+**API:** When `HITL_HANDLER=ticket`, **GET /hitl/pending** returns the list of pending escalations; **POST /hitl/pending/{session_id}/clear** marks a session as picked up (removes from pending).
+
 - **Agent Registry interface:** `get_agents_by_capability(capabilities: list[str])` → list of agent configs. Fields: `agent_id`, `capabilities`, `model`, `max_concurrent`, `latency_p99` (for observability).
 - **Scaling:** Supervisor is stateless; state lives in **checkpointer** (Redis/Postgres). Partitioning by `user_id` or `session_id` for horizontal scale.
 
@@ -720,8 +742,9 @@ The following components are **implemented** and form the core of the system:
 | 5 | **Tools** | **Support:** `search_knowledge_base`, `create_support_ticket`. **Billing:** `look_up_invoice`, `get_refund_status`, `create_refund_request`. LangChain tools in `src/tools/support_tools.py`, `billing_tools.py`; **MCP required** — MCP client in `src/tools/mcp_client.py` loads tools from `MCP_SERVER_URL` and merges with built-in. In-repo MCP server: `mcp_server/` (run `python -m mcp_server`; register tools in `mcp_server/server.py`). See `mcp_server/README.md`. |
 | 5a | **RAG (docs + history)** | **Doc RAG:** `RAGService.retrieve(query)` for KB/docs. **History RAG:** `ConversationHistoryRAG` — last N turns for issue handling. **ConversationStore** persists turns for long-term history. |
 | 5b | **AgentOps** | **Circuit breaker** (per-agent: closed/open/half_open), **failover** (fallback agent on failure), **health** (`GET /health` returns agent and MCP status; 503 when degraded). Config: `AGENT_OPS_ENABLED`, `CIRCUIT_BREAKER_*`, `FAILOVER_*`. See §5.4.1. |
+| 5c | **HITL (human-in-the-loop)** | **`src/hitl/`** module: `HitlHandler` ABC, `EscalationContext`; handlers: stub, ticket (create_support_ticket + pending list), email_notify. Supervisor **escalate_node** calls handler `on_escalate(ctx)`. Config: `HITL_ENABLED`, `HITL_HANDLER`, `HITL_EMAIL_TO`. **GET /hitl/pending**, **POST /hitl/pending/{session_id}/clear** for human queue. |
 | 6 | **Shared Service Interfaces** | RAG, session cache, conversation store: abstract interfaces with in-memory or minimal implementations. |
-| 7 | **Entrypoint / API** | FastAPI app: receives message → calls router → runs supervisor graph → returns response. **GraphQL** at `/graphql` for conversation history: queries `conversation(session_id, limit)` and `sessions(limit)`; see §5.5. **Health** at `GET /health` with AgentOps status (§5.4.1). |
+| 7 | **Entrypoint / API** | FastAPI app: receives message → calls router → runs supervisor graph → returns response. **GraphQL** at `/graphql` for conversation history: queries `conversation(session_id, limit)` and `sessions(limit)`; see §5.5. **Health** at `GET /health` with AgentOps status (§5.4.1). **HITL** at `GET /hitl/pending` and `POST /hitl/pending/{session_id}/clear`. |
 
 Optional extensions (some as stubs or for future work):
 

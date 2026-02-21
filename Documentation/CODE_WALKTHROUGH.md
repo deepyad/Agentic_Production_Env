@@ -9,6 +9,7 @@ This document walks through all code files and explains the **code flow** from a
 - **§3.17** `guardrails.py` — GuardrailResult, input blocking patterns, output filtering and truncation.
 - **§3.18** `rag.py` — RAGChunk, Stub vs Weaviate, connection and near_text retrieval.
 - **§3.19** `history_rag.py` — Last-N turns retrieval, format_for_context, difference from ConversationStore.
+- **§3.20** `hitl/` — Human-in-the-loop: HitlHandler, EscalationContext, stub/ticket/email handlers, get_hitl_handler, escalate_node usage.
 
 ---
 
@@ -25,6 +26,12 @@ Agentic_Production_Env/
 │   │   ├── __init__.py
 │   │   ├── circuit_breaker.py # Per-agent circuit (closed/open/half_open)
 │   │   └── health.py         # get_agent_ops_health for /health
+│   ├── hitl/                  # Human-in-the-loop: escalation handlers
+│   │   ├── __init__.py        # get_hitl_handler(stub | ticket | email)
+│   │   ├── base.py            # HitlHandler ABC, EscalationContext
+│   │   ├── stub.py            # StubHitlHandler (no-op)
+│   │   ├── ticket.py          # TicketHitlHandler (create_support_ticket + pending)
+│   │   └── email_notify.py    # EmailNotifyHitlHandler (log; optional email_to)
 │   ├── router.py              # Session router: intent → suggested agent IDs
 │   ├── supervisor.py          # LangGraph supervisor: route → invoke_agent → aggregate → escalate
 │   ├── registry.py            # Agent registry (in-memory: support, billing, tech, escalation)
@@ -86,8 +93,8 @@ High-level: **Client → POST /chat → Router → Supervisor graph → Agent �
     │         plan_node       → when USE_PLANNING: LLM picks agent → planned_agent_ids; else no-op
     │         route_node      → use planned_agent_ids or suggested_agent_ids; when AgentOps: skip circuit-open; pick current_agent
     │         invoke_agent_node → agents_map[current_agent](state); when AgentOps: record_success/record_failure; on exception try failover or friendly message + needs_escalation
-    │         aggregate_node   → FaithfulnessScorer.score(response, last_rag_context); if < threshold → needs_escalation
-    │         (optional) escalate_node → AIMessage "connecting you with a human agent"
+    │         aggregate_node   → FaithfulnessScorer.score(response, last_rag_context); if < threshold → needs_escalation, escalation_reason
+    │         (optional) escalate_node → build EscalationContext; hitl_handler.on_escalate(ctx); AIMessage "connecting you with a human agent"
     │      → result = { messages, current_agent, needs_escalation?, ... }
     │
     ├─ 4) Extract last AIMessage as reply; agent_id = result["current_agent"]
@@ -450,7 +457,25 @@ flowchart LR
 
 ---
 
-### 3.20 `src/shared_services/session_store.py`
+### 3.20 `src/hitl/` (HITL — human-in-the-loop) (detailed)
+
+**Purpose:** When the supervisor escalates (low faithfulness or agent-requested), the **escalate** node calls a **HITL handler** so the system can create tickets, notify humans, or enqueue for a human queue. The module is separate so you can plug in different back ends (stub, ticket, email) without changing the supervisor.
+
+**base.py:** **EscalationContext** (dataclass): `session_id`, `user_id`, `reason` (e.g. `"low_faithfulness"`, `"agent_requested"`), `last_user_message`, `last_agent_message`, `metadata`. **HitlHandler (ABC):** `on_escalate(ctx: EscalationContext) -> None`.
+
+**stub.py:** **StubHitlHandler** — `on_escalate` no-op. Used when `HITL_ENABLED=false` or `HITL_HANDLER=stub`.
+
+**ticket.py:** **TicketHitlHandler** — In `on_escalate(ctx)` invokes `create_support_ticket` (support_tools) with subject/description/priority from context; stores in `_pending_escalations[session_id]`. **get_pending_escalations()**, **clear_pending_escalation(session_id)** for API/dashboard.
+
+**email_notify.py:** **EmailNotifyHitlHandler** — Logs escalation; optional `email_to` (SMTP not implemented).
+
+**__init__.py:** **get_hitl_handler(handler_name, enabled, email_to=None)** — Returns StubHitlHandler if not enabled or handler=stub; TicketHitlHandler for `ticket`; EmailNotifyHitlHandler for `email`.
+
+**Flow:** Supervisor **escalate_node** builds `EscalationContext` from state, calls `hitl_handler.on_escalate(ctx)` (try/except), returns AIMessage "I'm connecting you with a human agent. Please hold." **GET /hitl/pending** and **POST /hitl/pending/{session_id}/clear** in api.py.
+
+---
+
+### 3.21 `src/shared_services/session_store.py`
 
 - **Purpose:** Abstract interface for **short-term** session state (e.g. for a checkpointer or session cache). In production this could be Redis with TTL. **Note:** The supervisor currently uses LangGraph’s **MemorySaver** (in-memory checkpointer) keyed by `thread_id`; it does **not** use this `SessionStore` class. This module is available for future use (e.g. custom session cache or Redis-backed checkpointer).
 - **SessionStore (ABC):** `get(session_id) -> Optional[Any]`; `set(session_id, state, ttl_seconds=86400)`. TTL is for expiration (e.g. 24h).
@@ -458,7 +483,7 @@ flowchart LR
 
 ---
 
-### 3.21 `src/ingestion/` (RAG ingestion)
+### 3.22 `src/ingestion/` (RAG ingestion)
 
 - **Purpose:** Populate the Weaviate RAG collection from **PDF files**: load PDFs → extract text → chunk → insert into Weaviate (with text2vec-openai so Weaviate embeds on insert).
 - **Layout:** `ingestion/rag_ingest.py` holds PDF extraction, chunking, Weaviate client/collection/insert, and the CLI; `ingestion/__main__.py` delegates to `rag_ingest.main()` so the package is runnable as a module.
@@ -489,7 +514,7 @@ GraphQL reads: same `conversation_store` via get_history / list_sessions.
 ## 5. Configuration and environment
 
 - **Required:** `OPENAI_API_KEY` (for LLM). `MCP_SERVER_URL` required if agents use MCP (default: they do via get_tools_with_mcp).
-- **Optional:** `USE_TF_INTENT`, `TF_INTENT_MODEL_PATH`; `USE_TF_FAITHFULNESS`, `TF_FAITHFULNESS_MODEL_PATH`; `HALLUCINATION_THRESHOLD_FAITHFULNESS`; `GUARDRAILS_ENABLED`; `TOP_P`; `WEAVIATE_URL`, `WEAVIATE_INDEX` for production RAG. **AgentOps:** `AGENT_OPS_ENABLED` (default true), `CIRCUIT_BREAKER_FAILURE_THRESHOLD`, `CIRCUIT_BREAKER_COOLDOWN_SECONDS`, `FAILOVER_ENABLED`, `FAILOVER_FALLBACK_AGENT_ID`, `AGENT_INVOCATION_TIMEOUT_SECONDS`.
+- **Optional:** `USE_TF_INTENT`, `TF_INTENT_MODEL_PATH`; `USE_TF_FAITHFULNESS`, `TF_FAITHFULNESS_MODEL_PATH`; `HALLUCINATION_THRESHOLD_FAITHFULNESS`; `GUARDRAILS_ENABLED`; `TOP_P`; `WEAVIATE_URL`, `WEAVIATE_INDEX` for production RAG. **AgentOps:** `AGENT_OPS_ENABLED` (default true), `CIRCUIT_BREAKER_FAILURE_THRESHOLD`, `CIRCUIT_BREAKER_COOLDOWN_SECONDS`, `FAILOVER_ENABLED`, `FAILOVER_FALLBACK_AGENT_ID`, `AGENT_INVOCATION_TIMEOUT_SECONDS`. **HITL:** `HITL_ENABLED` (default true), `HITL_HANDLER` (stub \| ticket \| email; default ticket), `HITL_EMAIL_TO` (for email handler).
 
 ---
 
