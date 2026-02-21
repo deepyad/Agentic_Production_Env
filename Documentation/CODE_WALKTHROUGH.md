@@ -83,8 +83,9 @@ High-level: **Client → POST /chat → Router → Supervisor graph → Agent �
     │
     ├─ 3) supervisor.invoke(initial_state, config)
     │      → supervisor.py compiled StateGraph
-    │         route_node      → when AgentOps: skip agents with circuit open; pick first available from suggested_agent_ids in agents_map
-    │         invoke_agent_node → agents_map[current_agent](state); when AgentOps: record_success/record_failure; on exception try failover agent or return friendly message + needs_escalation
+    │         plan_node       → when USE_PLANNING: LLM picks agent → planned_agent_ids; else no-op
+    │         route_node      → use planned_agent_ids or suggested_agent_ids; when AgentOps: skip circuit-open; pick current_agent
+    │         invoke_agent_node → agents_map[current_agent](state); when AgentOps: record_success/record_failure; on exception try failover or friendly message + needs_escalation
     │         aggregate_node   → FaithfulnessScorer.score(response, last_rag_context); if < threshold → needs_escalation
     │         (optional) escalate_node → AIMessage "connecting you with a human agent"
     │      → result = { messages, current_agent, needs_escalation?, ... }
@@ -113,8 +114,8 @@ High-level: **Client → POST /chat → Router → Supervisor graph → Agent �
 
 - **Purpose:** Central configuration from environment variables.
 - **Key:** `Config` dataclass; singleton `config`.
-- **Values:** `OPENAI_API_KEY`, `DEFAULT_MODEL`, `HALLUCINATION_THRESHOLD_FAITHFULNESS` / `_CONFIDENCE`, `WEAVIATE_*`, `TOP_P`, `GUARDRAILS_ENABLED`, `USE_TF_INTENT`, `TF_INTENT_MODEL_PATH`, `USE_TF_FAITHFULNESS`, `TF_FAITHFULNESS_MODEL_PATH`; **AgentOps:** `AGENT_OPS_ENABLED`, `CIRCUIT_BREAKER_FAILURE_THRESHOLD`, `CIRCUIT_BREAKER_COOLDOWN_SECONDS`, `FAILOVER_ENABLED`, `FAILOVER_FALLBACK_AGENT_ID`, `AGENT_INVOCATION_TIMEOUT_SECONDS`.
-- **Used by:** router (intent), supervisor (faithfulness threshold, circuit_breaker, failover), agents (top_p, guardrails), RAG (Weaviate URL/index), api (circuit breaker wiring, /health).
+- **Values:** `OPENAI_API_KEY`, `DEFAULT_MODEL`, `HALLUCINATION_THRESHOLD_FAITHFULNESS` / `_CONFIDENCE`, `WEAVIATE_*`, `TOP_P`, `GUARDRAILS_ENABLED`, `USE_TF_INTENT`, `TF_INTENT_MODEL_PATH`, `USE_TF_FAITHFULNESS`, `TF_FAITHFULNESS_MODEL_PATH`; **AgentOps:** `AGENT_OPS_ENABLED`, `CIRCUIT_BREAKER_*`, `FAILOVER_*`, `AGENT_INVOCATION_TIMEOUT_SECONDS`; **Optional patterns:** `USE_PLANNING` (supervisor plan node), `USE_REACT` (agents use Thought/Action/Observation loop), `REACT_MAX_STEPS`.
+- **Used by:** router (intent), supervisor (faithfulness, circuit_breaker, failover, plan node), agents (top_p, guardrails, ReAct), RAG (Weaviate URL/index), api (circuit breaker wiring, /health).
 
 ---
 
@@ -188,15 +189,16 @@ High-level: **Client → POST /chat → Router → Supervisor graph → Agent �
 
 ### 3.6 `src/supervisor.py`
 
-- **Purpose:** LangGraph supervisor: route → invoke_agent → aggregate → (optional) escalate.
-- **State:** `SupervisorState` (messages, current_agent, session_id, user_id, suggested_agent_ids, metadata, needs_escalation, resolved, last_rag_context).
+- **Purpose:** LangGraph supervisor: (optional) plan → route → invoke_agent → aggregate → (optional) escalate.
+- **State:** `SupervisorState` (messages, current_agent, session_id, user_id, suggested_agent_ids, planned_agent_ids, metadata, needs_escalation, resolved, last_rag_context).
 - **Graph construction (`create_supervisor_graph`):**
   - Creates Support and Billing agents via `create_support_agent(rag)`, `create_billing_agent(rag)`; `agents_map = {"support": ..., "billing": ...}`.
-  - **route_node:** Reads `suggested_agent_ids`; when AgentOps enabled, skips agents whose circuit is open; picks first available ID in `agents_map`; returns `{ current_agent }`.
+  - **plan_node:** When `USE_PLANNING=true`, LLM picks which agent (support or billing) should handle the message; returns `{ planned_agent_ids: [agent_id] }`. When disabled, no-op.
+  - **route_node:** Uses `planned_agent_ids` if set, else `suggested_agent_ids`; when AgentOps enabled, skips circuit-open; picks first available ID in `agents_map`; returns `{ current_agent }`.
   - **invoke_agent_node:** Calls `agents_map[current_agent](state)`. When AgentOps enabled: on success records `record_success(agent_id)`; on exception records `record_failure(agent_id)` and, if failover enabled, tries fallback agent (default support); if both fail, returns friendly AIMessage and sets needs_escalation. Returns messages, resolved, needs_escalation, last_rag_context.
   - **aggregate_node:** Gets last AI message and `last_rag_context`; runs `FaithfulnessScorer.score(response, context)`; if score < `config.hallucination_threshold_faithfulness` sets `needs_escalation=True`.
   - **escalate_node:** Appends AIMessage “I'm connecting you with a human agent. Please hold.”
-  - Edges: entry → route → invoke_agent → aggregate; conditional from aggregate to escalate or END; escalate → END.
+  - Edges: entry → plan → route → invoke_agent → aggregate; conditional from aggregate to escalate or END; escalate → END.
 - **FaithfulnessScorer:** Injected or default: `TFFaithfulnessScorer` when `config.use_tf_faithfulness` else `StubFaithfulnessScorer`.
 - **build_supervisor:** Accepts optional `circuit_breaker`; compiles graph with `MemorySaver()` checkpointer when `use_checkpointer=True`. API passes shared circuit breaker so `/health` and supervisor use the same instance.
 - **Flow:** Single `invoke(initial_state, config)` runs the full graph; result is used by `api.chat()` to get messages and current_agent.
@@ -227,10 +229,11 @@ High-level: **Client → POST /chat → Router → Supervisor graph → Agent �
   1. Get last HumanMessage; if none, return short fallback.
   2. `guardrail.guard_input(query)` → if not passed, return “I can only help with support questions…”.
   3. `rag.retrieve(query, top_k=3)` → doc_context; `history_rag.format_for_context(messages, max_turns=10)` → history_context.
-  4. Build system + user prompt with history and doc context; call `_invoke_with_tools(prompt_msgs)`.
+  4. Build system + user prompt; when USE_REACT call `_invoke_react(prompt_msgs)` else `_invoke_with_tools(prompt_msgs)`.
   5. `guardrail.guard_output(content)` → filtered text.
   6. Return messages, resolved (heuristic: no “unsure”/“escalat”), needs_escalation (heuristic: “escalat” or “ticket”), last_rag_context.
-- **_invoke_with_tools:** Invokes LLM; if tool_calls, runs each tool, appends ToolMessage, recurs until no tool calls; returns final AIMessage.
+- **_invoke_with_tools:** Invokes LLM with bound tools; if tool_calls, runs each tool, appends ToolMessage, recurs until no tool calls; returns final AIMessage.
+- **_invoke_react:** When `USE_REACT=true`, ReAct loop (Thought → Action → Action Input → Observation) until "Final Answer:"; same tools, max `REACT_MAX_STEPS`.
 
 ---
 
@@ -238,7 +241,7 @@ High-level: **Client → POST /chat → Router → Supervisor graph → Agent �
 
 - **Purpose:** Same structure as Support, tuned for billing (invoices, refunds).
 - **create_billing_agent:** Same pattern; BillingAgent uses billing_tools + MCP.
-- **BillingAgent.__call__:** Same flow: guard_input → RAG + history_rag → prompt → _invoke_with_tools → guard_output; resolved/needs_escalation heuristics based on “contact”/“billing team”.
+- **BillingAgent.__call__:** Same flow as Support; when USE_REACT uses _invoke_react else _invoke_with_tools; resolved/needs_escalation heuristics based on “contact”/“billing team”.
 
 ---
 

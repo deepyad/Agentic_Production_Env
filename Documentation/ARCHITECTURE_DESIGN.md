@@ -78,12 +78,12 @@ This framework uses a **hierarchical supervisor / orchestrator** architecture. O
 ```mermaid
 flowchart TB
     subgraph Top["Orchestrator Layer (top)"]
-        SUP[Supervisor / Orchestrator<br/>LangGraph<br/>optional: Plan then route]
+        SUP[Supervisor / Orchestrator<br/>LangGraph<br/>plan → route → invoke_agent → aggregate]
     end
 
     subgraph Bottom["Agent Pool Layer (below)"]
-        SP[Support Agent<br/>tool use; optional ReAct]
-        BP[Billing Agent<br/>tool use; optional ReAct]
+        SP[Support Agent<br/>tool use or ReAct]
+        BP[Billing Agent<br/>tool use or ReAct]
         TP[Tech Agent]
         EP[Escalation Agent]
     end
@@ -112,8 +112,8 @@ flowchart TB
     BP <-->|"doc + history"| RAGLayer
 ```
 
-- **Top:** One **Supervisor** — holds global state, routes to agents, aggregates responses.
-- **Bottom:** Specialized **agents** — Support, Billing, Tech, Escalation. Each handles its domain; invoked by the supervisor; replies flow back to the supervisor.
+- **Top:** One **Supervisor** — holds global state; when **USE_PLANNING** is enabled, a **plan** node runs first (LLM picks which agent should handle the turn), then **route** → **invoke_agent** → **aggregate**. Otherwise entry goes straight to route.
+- **Bottom:** Specialized **agents** — Support, Billing, Tech, Escalation. Each uses **tool use** (tool-calling loop) by default; when **USE_REACT** is enabled, agents use a **ReAct** loop (Thought → Action → Action Input → Observation) until Final Answer.
 - **RAG (Doc + History):** Agents use **Doc RAG** (KB/docs) and **History RAG** (last N turns for issue handling).
 - **Tools + MCP:** Agents use **LangChain tools** (built-in) and **MCP** (required) for tool calls (e.g. search_knowledge_base, look_up_invoice).
 
@@ -138,13 +138,13 @@ flowchart TB
         GLB --> GW --> RTR
     end
 
-    subgraph Orchestrator["2. Orchestrator Layer (optional: Plan)"]
+    subgraph Orchestrator["2. Orchestrator Layer"]
         SUP[Supervisor Agent<br/>LangGraph]
         REG[Agent Registry]
         SUP <--> REG
     end
 
-    subgraph Pools["3. Agent Pool Layer (optional: ReAct)"]
+    subgraph Pools["3. Agent Pool Layer"]
         SP[Support Pool]
         BP[Billing Pool]
         TP[Tech Pool]
@@ -179,7 +179,7 @@ flowchart TB
     BP <-->|tool calls| ToolsMCP
 ```
 
-**AgentOps:** Dispatch passes through circuit breaker (skip open circuits); on failure, failover to fallback agent. Health: `GET /health` reports agent and MCP status (§5.4.1).
+**AgentOps:** Dispatch passes through circuit breaker (skip open circuits); on failure, failover to fallback agent. Health: `GET /health` reports agent and MCP status (§5.4.1). Planning and ReAct are not implemented; see §5.3 (Optional agent patterns) for where they could be added.
 
 ---
 
@@ -205,7 +205,6 @@ sequenceDiagram
     RTR->>SUP: Route to supervisor + session_id
     SUP->>REG: Get agent capabilities
     REG-->>SUP: Agent metadata
-    Note over SUP: optional: Plan (multi-agent sequence)
     SUP->>SUP: Decide handoff / next agent (skip circuit-open)
     SUP->>AGT: Invoke agent (failover on failure)
     AGT->>AGT: guard_input (user message)
@@ -213,7 +212,6 @@ sequenceDiagram
     HIST-->>AGT: Conversation history
     AGT->>DOC: Retrieve docs (KB)
     DOC-->>AGT: Retrieved docs
-    Note over AGT: optional: ReAct (Thought → Action → Observation)
     AGT->>AGT: LLM call
     AGT->>TOOLS: Tool call (built-in)
     TOOLS-->>AGT: Tool result
@@ -415,40 +413,38 @@ Tools are **LangChain tools** bound to the LLM via `bind_tools()`; each agent ru
 
 **MCP (Model Context Protocol) — required.** Tools are loaded from an **MCP server** (e.g. streamable-http at `MCP_SERVER_URL`). The `langchain-mcp-adapters` library converts MCP tools into LangChain tools and merges them with the built-in tools above. `MCP_SERVER_URL` must be set; the system fails to start if MCP is not configured or unreachable. The architecture diagrams in §1.1, §1.2, §2, and §3 show **Tools** and **MCP Server** as separate boxes; in this repo, built-in tools live in `src/tools/`, the MCP client in `src/tools/mcp_client.py`, and you can run the in-repo MCP server from `mcp_server/` (register tools in `mcp_server/server.py`; see `mcp_server/README.md`).
 
-**Optional agent patterns: ReAct and Planning**
+**Optional agent patterns: ReAct and Planning (implemented, enabled via env)**
 
-The current implementation uses **tool use** only (tool-calling loop in Support/Billing agents). The following patterns are **not** implemented today but can be added where they add the most value:
+Both patterns are **implemented** and can be enabled with environment variables:
 
-| Pattern | Where it can be used | What it adds |
-|--------|----------------------|--------------|
-| **ReAct** (Reasoning + Acting) | **Inside Support/Billing agents** (`src/agents/support.py`, `billing.py`): Replace or layer a ReAct loop over the tool-calling loop so the model outputs explicit "Thought" (reasoning) and "Action" (tool + inputs); you run the tool and feed back "Observation"; repeat. Optionally in an **escalation agent**: ReAct can make the "why escalate" and "what to tell the user" decision process interpretable. | Interpretable reasoning traces; better for multi-step or ambiguous queries (e.g. "search KB, then if that doesn't help, create a ticket"). |
-| **Planning** (plan-then-execute) | **Supervisor** (`src/supervisor.py`): Add a **plan** node before route: the LLM outputs a small plan (e.g. "1. Billing: refund 2. Support: update ticket"); the supervisor then invokes agents in that order over one or more steps. Today the supervisor picks one agent per turn. **Inside an agent**: For complex single-agent requests (e.g. "check invoice, request refund, email summary"), the agent could first output a plan (step 1: `look_up_invoice`, step 2: `create_refund_request`, …) then execute. | Multi-agent sequences for cross-domain requests; clearer multi-step tool execution within one agent. |
+| Pattern | Where implemented | Env / config | Behavior |
+|--------|--------------------|--------------|----------|
+| **Planning** | **Supervisor** (`src/supervisor.py`): **plan** node runs first when enabled. LLM is asked which single agent (support or billing) should handle the user message; result is stored as `planned_agent_ids`. **Route** then uses that (or router suggestions when planning is off). | `USE_PLANNING=true` (default: false) | Entry → **plan** → route → invoke_agent → aggregate. Plan node no-op when disabled. |
+| **ReAct** | **Support and Billing agents** (`src/agents/support.py`, `billing.py`): When enabled, agents use a **ReAct** loop instead of the standard tool-calling loop. Model outputs "Thought:", "Action:", "Action Input:"; we run the tool and feed "Observation:"; repeat until "Final Answer:". | `USE_REACT=true` (default: false), `REACT_MAX_STEPS` (default: 10) | Interpretable reasoning traces; same tools, different invocation style. |
 
-The diagrams in §1.2, §2, §3, and the **Agent patterns (optional)** diagram below show where these optional patterns fit in the flow.
-
-**Agent patterns (optional) — where ReAct and Planning fit**
+**Agent patterns (optional) — Planning and ReAct flow**
 
 ```mermaid
 flowchart LR
-    subgraph Supervisor["Supervisor (optional: Planning)"]
+    subgraph Supervisor["Supervisor (USE_PLANNING)"]
+        P[Plan<br/>LLM picks agent]
         R[Route]
-        P[Plan<br/>multi-agent sequence]
-        R --> P
-        P --> I[Invoke agent(s)]
+        I[Invoke agent]
+        P --> R --> I
     end
 
-    subgraph Agent["Agent (optional: ReAct)"]
+    subgraph Agent["Agent (USE_REACT)"]
         T[Thought]
-        A[Action<br/>tool call]
-        O[Observation<br/>tool result]
+        A[Action]
+        O[Observation]
         T --> A --> O --> T
     end
 
     Supervisor --> Agent
 ```
 
-- **Planning (optional):** In the supervisor, a **Plan** step before or after **Route** can output a sequence of agents (e.g. Billing then Support); **Invoke** then runs agents in that order.
-- **ReAct (optional):** Inside an agent, a **Thought → Action → Observation** loop replaces or wraps the current tool-calling loop; the model explicitly reasons (Thought), calls a tool (Action), and receives the result (Observation), then repeats until done.
+- **Planning:** When `USE_PLANNING=true`, the **plan** node runs before **route** and sets `planned_agent_ids` from an LLM call; **route** uses that to choose `current_agent`. When false, entry goes to **route** and behavior is unchanged (router suggestions only).
+- **ReAct:** When `USE_REACT=true`, each agent uses `_invoke_react()` (Thought → Action → Action Input → Observation loop) instead of `_invoke_with_tools()`. Same tools; the model outputs structured text that we parse and execute.
 
 ---
 

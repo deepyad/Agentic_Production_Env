@@ -34,5 +34,10 @@ class Config:
     failover_fallback_agent_id: str = os.getenv("FAILOVER_FALLBACK_AGENT_ID", "support")
     agent_invocation_timeout_seconds: float = float(os.getenv("AGENT_INVOCATION_TIMEOUT_SECONDS", "30"))
 
+    # Optional agent patterns: Planning (supervisor), ReAct (agents)
+    use_planning: bool = os.getenv("USE_PLANNING", "false").lower() in ("true", "1", "yes")
+    use_react: bool = os.getenv("USE_REACT", "false").lower() in ("true", "1", "yes")
+    react_max_steps: int = int(os.getenv("REACT_MAX_STEPS", "10"))
+
 
 config = Config()

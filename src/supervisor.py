@@ -1,7 +1,9 @@
-"""Supervisor LangGraph graph: route → invoke_agent → aggregate → (optional) escalate."""
+"""Supervisor LangGraph graph: (optional) plan → route → invoke_agent → aggregate → (optional) escalate."""
+import re
 from typing import Annotated, Any, Literal, Optional, TypedDict
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import MemorySaver
@@ -27,6 +29,7 @@ class SupervisorState(TypedDict, total=False):
     session_id: str
     user_id: str
     suggested_agent_ids: list[str]
+    planned_agent_ids: list[str]
     metadata: dict[str, Any]
     needs_escalation: bool
     resolved: bool
@@ -59,10 +62,38 @@ def create_supervisor_graph(
     support_agent = create_support_agent(rag=rag)
     billing_agent = create_billing_agent(rag=rag)
     agents_map = {"support": support_agent, "billing": billing_agent}
+    use_planning = getattr(config, "use_planning", False)
+
+    def plan_node(state: dict[str, Any]) -> dict[str, Any]:
+        """When USE_PLANNING: use LLM to pick which agent(s) should handle this turn; otherwise no-op."""
+        if not use_planning:
+            return {}
+        messages = state.get("messages", [])
+        last_human = next((m for m in reversed(messages) if isinstance(m, HumanMessage)), None)
+        suggested = state.get("suggested_agent_ids", ["support"])
+        if not last_human or not getattr(last_human, "content", None):
+            return {"planned_agent_ids": list(suggested)[:1] or ["support"]}
+        user_text = str(last_human.content).strip()[:500]
+        available = [a for a in ["support", "billing"] if a in agents_map]
+        prompt = (
+            f"User message: {user_text}\n"
+            f"Suggested agents from router: {suggested}\n"
+            f"Available agents: {available}. Which single agent should handle this? Reply with exactly one word: support or billing."
+        )
+        llm = ChatOpenAI(model=config.default_model, temperature=0)
+        try:
+            resp = llm.invoke([SystemMessage(content="You are a router. Reply with only one word: support or billing."), HumanMessage(content=prompt)])
+            text = (getattr(resp, "content", None) or "").strip().lower()
+            match = re.search(r"\b(support|billing)\b", text)
+            chosen = match.group(1) if match and match.group(1) in agents_map else (available[0] if available else "support")
+            return {"planned_agent_ids": [chosen]}
+        except Exception:
+            return {"planned_agent_ids": list(suggested)[:1] or ["support"]}
 
     def route_node(state: dict[str, Any]) -> dict[str, Any]:
-        """Use router suggestions; skip agents with open circuit when AgentOps enabled."""
-        suggested = state.get("suggested_agent_ids", ["support"])
+        """Use planned_agent_ids (if planning) or router suggestions; skip agents with open circuit when AgentOps enabled."""
+        planned = state.get("planned_agent_ids") or []
+        suggested = list(planned) if planned else list(state.get("suggested_agent_ids", ["support"]))
         for aid in suggested:
             if aid not in agents_map:
                 continue
@@ -138,15 +169,17 @@ def create_supervisor_graph(
             ],
         }
 
-    # Build graph
+    # Build graph: plan (when USE_PLANNING) → route → invoke_agent → aggregate → (optional) escalate
     builder = StateGraph(SupervisorState)
 
+    builder.add_node("plan", plan_node)
     builder.add_node("route", route_node)
     builder.add_node("invoke_agent", invoke_agent_node)
     builder.add_node("aggregate", aggregate_node)
     builder.add_node("escalate", escalate_node)
 
-    builder.set_entry_point("route")
+    builder.set_entry_point("plan")
+    builder.add_edge("plan", "route")
     builder.add_edge("route", "invoke_agent")
     builder.add_edge("invoke_agent", "aggregate")
 

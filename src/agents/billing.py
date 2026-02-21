@@ -1,4 +1,6 @@
 """Billing agent pool: invoices, payments, refunds. Uses tools + RAG + conversation history."""
+import json
+import re
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -40,6 +42,9 @@ class BillingAgent:
         self.tools = get_tools_with_mcp(built_in)
         # top_p: nucleus sampling to constrain token selection, reduce hallucinations
         self.llm = ChatOpenAI(model=model, temperature=0, top_p=config.top_p).bind_tools(self.tools)
+        self.use_react = getattr(config, "use_react", False)
+        self.react_max_steps = getattr(config, "react_max_steps", 10)
+        self.llm_no_tools = ChatOpenAI(model=model, temperature=0, top_p=config.top_p) if self.use_react else None
 
     def __call__(self, state: dict[str, Any]) -> dict[str, Any]:
         """Process state: guardrails → RAG context + tool-calling loop → guard_output."""
@@ -81,8 +86,11 @@ class BillingAgent:
                 f"Current user message: {query}"
             ),
         ]
-        # Tool-calling loop
-        response = self._invoke_with_tools(prompt_msgs)
+        # Tool use: ReAct loop (Thought/Action/Observation) or standard tool-calling
+        if self.use_react and self.llm_no_tools:
+            response = self._invoke_react(prompt_msgs)
+        else:
+            response = self._invoke_with_tools(prompt_msgs)
         content = response.content if isinstance(response.content, str) else str(response.content or "")
         # Output guardrail: filter policy-violating content
         content = self.guardrail.guard_output(content).filtered_text
@@ -115,3 +123,50 @@ class BillingAgent:
             msgs.append(ToolMessage(content=str(result), tool_call_id=tool_call_id))
 
         return self._invoke_with_tools(msgs)
+
+    def _invoke_react(self, messages: list) -> AIMessage:
+        """ReAct loop: Thought → Action → Action Input → Observation, until Final Answer."""
+        tool_map = {t.name: t for t in self.tools}
+        tool_desc = "\n".join(f"- {name}: {getattr(t, 'description', '') or ''}" for name, t in tool_map.items())
+        react_system = (
+            "You are a billing support agent. Use this format:\n"
+            "Thought: (reason about what to do next)\n"
+            "Action: <tool_name>\n"
+            "Action Input: <input as JSON or text>\n"
+            "Observation: (will be filled by the system)\n"
+            "When done, reply with: Final Answer: <your answer>\n\n"
+            f"Available tools:\n{tool_desc}"
+        )
+        msgs = [SystemMessage(content=react_system)] + [m for m in messages if not isinstance(m, SystemMessage)]
+        scratch = ""
+
+        for step in range(self.react_max_steps):
+            resp = self.llm_no_tools.invoke(msgs)
+            text = (getattr(resp, "content", None) or "").strip()
+            scratch += "\n" + text
+
+            if "Final Answer:" in text:
+                final = text.split("Final Answer:")[-1].strip().split("\n")[0].strip()
+                return AIMessage(content=final)
+
+            action_match = re.search(r"Action:\s*(\w+)", text, re.IGNORECASE)
+            input_match = re.search(r"Action Input:\s*(.+?)(?=\n(?:Observation|Thought|Action)|$)", text, re.DOTALL | re.IGNORECASE)
+            action = action_match.group(1).strip() if action_match else None
+            action_input_str = input_match.group(1).strip() if input_match else "{}"
+
+            if not action or action not in tool_map:
+                msgs.append(HumanMessage(content=f"{text}\nObservation: Invalid or unknown action. Use a tool from the list or reply with Final Answer: ..."))
+                continue
+
+            try:
+                try:
+                    action_input = json.loads(action_input_str) if action_input_str.strip() else {}
+                except json.JSONDecodeError:
+                    action_input = {"query": action_input_str} if "query" in (getattr(tool_map[action], "args", {}) or {}) else {"input": action_input_str}
+                result = tool_map[action].invoke(action_input)
+                obs = str(result)
+            except Exception as e:
+                obs = f"Error: {e}"
+            msgs.append(HumanMessage(content=f"{text}\nObservation: {obs}"))
+
+        return AIMessage(content=(scratch.strip() or "I'm unable to complete this request. Please try again.")[-2000:])
