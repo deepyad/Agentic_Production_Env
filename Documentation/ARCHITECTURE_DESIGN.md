@@ -78,12 +78,12 @@ This framework uses a **hierarchical supervisor / orchestrator** architecture. O
 ```mermaid
 flowchart TB
     subgraph Top["Orchestrator Layer (top)"]
-        SUP[Supervisor / Orchestrator<br/>LangGraph]
+        SUP[Supervisor / Orchestrator<br/>LangGraph<br/>optional: Plan then route]
     end
 
     subgraph Bottom["Agent Pool Layer (below)"]
-        SP[Support Agent]
-        BP[Billing Agent]
+        SP[Support Agent<br/>tool use; optional ReAct]
+        BP[Billing Agent<br/>tool use; optional ReAct]
         TP[Tech Agent]
         EP[Escalation Agent]
     end
@@ -117,6 +117,8 @@ flowchart TB
 - **RAG (Doc + History):** Agents use **Doc RAG** (KB/docs) and **History RAG** (last N turns for issue handling).
 - **Tools + MCP:** Agents use **LangChain tools** (built-in) and **MCP** (required) for tool calls (e.g. search_knowledge_base, look_up_invoice).
 
+**Implementation mapping (this repo):** The “Tools” and “MCP Server” boxes in the diagrams map as follows. **Tools** = built-in LangChain tools in `src/tools/support_tools.py` and `src/tools/billing_tools.py`; the app merges them with MCP tools via `src/tools/mcp_client.py`. **MCP Server** = the in-repo server in `mcp_server/` (run with `python -m mcp_server`; register tools in `mcp_server/server.py`) or any external MCP server you run at `MCP_SERVER_URL`. The client loads tools from that URL and merges them with the built-in set.
+
 So: **supervisor / orchestrator = hierarchical** — supervisor on top, agents below; one agent per turn; all coordination through the supervisor; agents use tools and MCP.
 
 ---
@@ -136,13 +138,13 @@ flowchart TB
         GLB --> GW --> RTR
     end
 
-    subgraph Orchestrator["2. Orchestrator Layer"]
+    subgraph Orchestrator["2. Orchestrator Layer (optional: Plan)"]
         SUP[Supervisor Agent<br/>LangGraph]
         REG[Agent Registry]
         SUP <--> REG
     end
 
-    subgraph Pools["3. Agent Pool Layer"]
+    subgraph Pools["3. Agent Pool Layer (optional: ReAct)"]
         SP[Support Pool]
         BP[Billing Pool]
         TP[Tech Pool]
@@ -164,10 +166,10 @@ flowchart TB
 
     U --> Ingress
     RTR -->|route by intent| SUP
-    SUP -->|dispatch| SP
-    SUP -->|dispatch| BP
-    SUP -->|dispatch| TP
-    SUP -->|dispatch| EP
+    SUP -->|dispatch via AgentOps| SP
+    SUP -->|dispatch via AgentOps| BP
+    SUP -->|dispatch via AgentOps| TP
+    SUP -->|dispatch via AgentOps| EP
     SP --> Shared
     BP --> Shared
     TP --> Shared
@@ -176,6 +178,8 @@ flowchart TB
     SP <-->|tool calls| ToolsMCP
     BP <-->|tool calls| ToolsMCP
 ```
+
+**AgentOps:** Dispatch passes through circuit breaker (skip open circuits); on failure, failover to fallback agent. Health: `GET /health` reports agent and MCP status (§5.4.1).
 
 ---
 
@@ -201,13 +205,15 @@ sequenceDiagram
     RTR->>SUP: Route to supervisor + session_id
     SUP->>REG: Get agent capabilities
     REG-->>SUP: Agent metadata
-    SUP->>SUP: Decide handoff / next agent
-    SUP->>AGT: Invoke agent
+    Note over SUP: optional: Plan (multi-agent sequence)
+    SUP->>SUP: Decide handoff / next agent (skip circuit-open)
+    SUP->>AGT: Invoke agent (failover on failure)
     AGT->>AGT: guard_input (user message)
     AGT->>HIST: Retrieve last N turns (issue handling)
     HIST-->>AGT: Conversation history
     AGT->>DOC: Retrieve docs (KB)
     DOC-->>AGT: Retrieved docs
+    Note over AGT: optional: ReAct (Thought → Action → Observation)
     AGT->>AGT: LLM call
     AGT->>TOOLS: Tool call (built-in)
     TOOLS-->>AGT: Tool result
@@ -347,16 +353,13 @@ This deployment view complements the logical flow (Section 2) and request sequen
 | **Regional API Gateway** | Auth, rate limiting (e.g., 100 req/min per user), WebSocket upgrade for chat. |
 | **Session Router** | Classifies intent and returns target agent pool in **&lt;50ms** without an LLM call. Implementations: **keyword** (stub), **TensorFlow** (small Keras model), or **embed → Weaviate** (production semantic). |
 
-**What we will develop:**
+**Implemented:**
 
 - **Session Router** service/function:
   - Input: `user_id`, `message`, optional `session_id`.
-  - **Intent options (implemented):**
-    - **Keyword:** `KeywordIntentClassifier` — map keywords to agent IDs (default).
-    - **TensorFlow:** `TFIntentClassifier` — small Keras model (TextVectorization + Embedding + Dense); set `USE_TF_INTENT=true`. Trains from synthetic data on first run or loads from `TF_INTENT_MODEL_PATH`; falls back to keyword if TensorFlow unavailable.
-    - **Weaviate (production):** embed message → query Weaviate with pre-indexed intent → agent pool IDs.
+  - **Intent options:** **Keyword** (`KeywordIntentClassifier` — maps keywords to agent IDs, default), **TensorFlow** (`TFIntentClassifier` — small Keras model; set `USE_TF_INTENT=true`; trains from synthetic data or loads from `TF_INTENT_MODEL_PATH`; falls back to keyword if unavailable), **Weaviate** (production option: embed message → query Weaviate for agent pool IDs).
   - Output: `session_id`, `suggested_agent_pool_ids`, `embedding_cache_key` (for intent caching).
-- **Gateway contract:** REST/WebSocket API shape (paths, auth, rate limits) so the rest of the system can integrate.
+- **Gateway contract:** REST/WebSocket API shape (paths, auth, rate limits) is defined so the rest of the system can integrate.
 
 ---
 
@@ -367,18 +370,16 @@ This deployment view complements the logical flow (Section 2) and request sequen
 | Component | Role |
 |-----------|------|
 | **Supervisor Agent** | LangGraph workflow that holds **global conversation state**, routes to specialized agents, and aggregates results. |
-| **Agent Registry** | Metadata store (e.g., DynamoDB or in-memory for pseudo-code) of agent capabilities, models, and limits. |
+| **Agent Registry** | Metadata store (e.g., DynamoDB or in-memory) of agent capabilities, models, and limits. |
 
-**What we will develop:**
+**Implemented:**
 
 - **Supervisor LangGraph graph:**
   - **State:** `messages`, `current_agent`, `session_id`, `user_id`, `last_rag_context`, `metadata` (e.g., escalation flag, resolved intents).
-  - **Nodes:** `route` (use router suggestion or LLM to pick agent), `invoke_agent` (call the chosen pool; agents return `last_rag_context`), `aggregate` (run **FaithfulnessScorer** on response + last_rag_context; if score &lt; threshold set needs_escalation), `escalate` (optional).
+  - **Nodes:** `route` (uses router suggestion or LLM to pick agent), `invoke_agent` (calls the chosen pool; agents return `last_rag_context`), `aggregate` (runs **FaithfulnessScorer** on response + last_rag_context; if score &lt; threshold sets needs_escalation), `escalate` (optional).
   - **Edges:** Conditional from `route` to agent nodes; from each agent back to `aggregate`; optional `aggregate` → `route` for next turn.
-- **Agent Registry interface:**
-  - `get_agents_by_capability(capabilities: list[str])` → list of agent configs.
-  - Fields: `agent_id`, `capabilities`, `model`, `max_concurrent`, `latency_p99` (for observability).
-- **Scaling:** Supervisor runs in stateless pods; state lives in **checkpointer** (Redis/Postgres). Partitioning by `user_id` or `session_id` for horizontal scale.
+- **Agent Registry interface:** `get_agents_by_capability(capabilities: list[str])` → list of agent configs. Fields: `agent_id`, `capabilities`, `model`, `max_concurrent`, `latency_p99` (for observability).
+- **Scaling:** Supervisor is stateless; state lives in **checkpointer** (Redis/Postgres). Partitioning by `user_id` or `session_id` for horizontal scale.
 
 ---
 
@@ -392,11 +393,11 @@ This deployment view complements the logical flow (Section 2) and request sequen
 | **Stateless containers** | Each agent runs as a LangGraph subgraph or tool-callable workflow (e.g., FastAPI + LangGraph). |
 | **Pool sharding** | By domain (billing_pool_1..N) and optionally by region (eu_billing_pool, us_billing_pool). |
 
-**What we will develop:**
+**Implemented:**
 
-- **Per-pool LangGraph subgraph** (or callable node):
+- **Per-pool LangGraph subgraph** (callable node):
   - Input: current state slice (messages, user query, context from RAG, **conversation history**).
-  - Steps: **conversation history RAG** (retrieve last N turns for issue handling) → RAG retrieval (docs) → LLM call **with tools** (tool-calling loop) → structured response.
+  - Steps: **conversation history RAG** (retrieves last N turns for issue handling) → RAG retrieval (docs) → LLM call **with tools** (tool-calling loop) → structured response.
   - Output: updated messages + metadata (e.g., `resolved`, `needs_escalation`).
 - **Inter-agent communication:** LangGraph **state and messages** only (no OVON). Supervisor passes state in; agent returns state out.
 - **Model tiering:** e.g., GPT-4o-mini for most turns, GPT-4o for complex or escalation paths (configurable per pool in registry).
@@ -412,7 +413,42 @@ Tools are **LangChain tools** bound to the LLM via `bind_tools()`; each agent ru
 
 **RAG for history (issue handling):** Agents use **ConversationHistoryRAG** to retrieve the last N turns and include them in the prompt. This lets agents understand the ongoing issue (e.g. invoice ID, order ID mentioned earlier) and avoid repeating themselves. Simple impl: last N turns; production: vector search over embedded turns. **ConversationStore** persists turns for long-term history and analytics.
 
-**MCP (Model Context Protocol) — required.** Tools are loaded from an **MCP server** (e.g. streamable-http at `MCP_SERVER_URL`). The `langchain-mcp-adapters` library converts MCP tools into LangChain tools and merges them with the built-in tools above. `MCP_SERVER_URL` must be set; the system fails to start if MCP is not configured or unreachable.
+**MCP (Model Context Protocol) — required.** Tools are loaded from an **MCP server** (e.g. streamable-http at `MCP_SERVER_URL`). The `langchain-mcp-adapters` library converts MCP tools into LangChain tools and merges them with the built-in tools above. `MCP_SERVER_URL` must be set; the system fails to start if MCP is not configured or unreachable. The architecture diagrams in §1.1, §1.2, §2, and §3 show **Tools** and **MCP Server** as separate boxes; in this repo, built-in tools live in `src/tools/`, the MCP client in `src/tools/mcp_client.py`, and you can run the in-repo MCP server from `mcp_server/` (register tools in `mcp_server/server.py`; see `mcp_server/README.md`).
+
+**Optional agent patterns: ReAct and Planning**
+
+The current implementation uses **tool use** only (tool-calling loop in Support/Billing agents). The following patterns are **not** implemented today but can be added where they add the most value:
+
+| Pattern | Where it can be used | What it adds |
+|--------|----------------------|--------------|
+| **ReAct** (Reasoning + Acting) | **Inside Support/Billing agents** (`src/agents/support.py`, `billing.py`): Replace or layer a ReAct loop over the tool-calling loop so the model outputs explicit "Thought" (reasoning) and "Action" (tool + inputs); you run the tool and feed back "Observation"; repeat. Optionally in an **escalation agent**: ReAct can make the "why escalate" and "what to tell the user" decision process interpretable. | Interpretable reasoning traces; better for multi-step or ambiguous queries (e.g. "search KB, then if that doesn't help, create a ticket"). |
+| **Planning** (plan-then-execute) | **Supervisor** (`src/supervisor.py`): Add a **plan** node before route: the LLM outputs a small plan (e.g. "1. Billing: refund 2. Support: update ticket"); the supervisor then invokes agents in that order over one or more steps. Today the supervisor picks one agent per turn. **Inside an agent**: For complex single-agent requests (e.g. "check invoice, request refund, email summary"), the agent could first output a plan (step 1: `look_up_invoice`, step 2: `create_refund_request`, …) then execute. | Multi-agent sequences for cross-domain requests; clearer multi-step tool execution within one agent. |
+
+The diagrams in §1.2, §2, §3, and the **Agent patterns (optional)** diagram below show where these optional patterns fit in the flow.
+
+**Agent patterns (optional) — where ReAct and Planning fit**
+
+```mermaid
+flowchart LR
+    subgraph Supervisor["Supervisor (optional: Planning)"]
+        R[Route]
+        P[Plan<br/>multi-agent sequence]
+        R --> P
+        P --> I[Invoke agent(s)]
+    end
+
+    subgraph Agent["Agent (optional: ReAct)"]
+        T[Thought]
+        A[Action<br/>tool call]
+        O[Observation<br/>tool result]
+        T --> A --> O --> T
+    end
+
+    Supervisor --> Agent
+```
+
+- **Planning (optional):** In the supervisor, a **Plan** step before or after **Route** can output a sequence of agents (e.g. Billing then Support); **Invoke** then runs agents in that order.
+- **ReAct (optional):** Inside an agent, a **Thought → Action → Observation** loop replaces or wraps the current tool-calling loop; the model explicitly reasons (Thought), calls a tool (Action), and receives the result (Observation), then repeats until done.
 
 ---
 
@@ -428,15 +464,104 @@ Tools are **LangChain tools** bound to the LLM via `bind_tools()`; each agent ru
 | **Conversation Store** | DynamoDB (or equivalent): long-term conversation history for analytics and replay. |
 | **Analytics / Monitoring** | Metrics (latency, queue depth, errors) and optional “analytics agents” for SLA or hallucination monitoring. |
 
-**What we will develop:**
+**Implemented:**
 
 - **RAG service interface:** `retrieve(query: str, top_k: int, filters?: dict)` → list of chunks. Production implementation uses **Weaviate**.
 - **Intent classifier interface:** `IntentClassifier.classify(message)` → suggested agent pool IDs. Implementations: `KeywordIntentClassifier`, `TFIntentClassifier` (TensorFlow/Keras), or Weaviate-based semantic lookup.
-- **Faithfulness scorer interface:** `FaithfulnessScorer.score(response, context)` → 0–1. **TFFaithfulnessScorer** (TensorFlow/Keras, trained on response+context pairs) used in supervisor aggregate; set `USE_TF_FAITHFULNESS=true`. Default `StubFaithfulnessScorer` returns 1.0. Recommended over LLM-as-judge for cost and latency.
-- **Guardrail service:** `guard_input(text)` and `guard_output(text)` to block off-topic or policy-violating content; `SimpleGuardrailService` for keyword-based checks, or `guardrails-ai` for richer validators.
+- **Faithfulness scorer interface:** `FaithfulnessScorer.score(response, context)` → 0–1. **TFFaithfulnessScorer** (TensorFlow/Keras) is used in supervisor aggregate when `USE_TF_FAITHFULNESS=true`; default `StubFaithfulnessScorer` returns 1.0.
+- **Guardrail service:** `guard_input(text)` and `guard_output(text)` block off-topic or policy-violating content; `SimpleGuardrailService` for keyword-based checks, or `guardrails-ai` for richer validators.
 - **Session store interface:** `get(session_id)`, `set(session_id, state, ttl)`, used by LangGraph checkpointer.
-- **Conversation store interface:** `append_turn(session_id, role, content, metadata)`, `get_history(session_id)`.
-- **Circuit breaker / health:** Optional stubs for “agent unhealthy” so the registry can skip or replace a pool.
+- **Conversation store interface:** `append_turn(session_id, role, content, metadata)`, `get_history(session_id)`, `list_sessions(limit)`.
+- **AgentOps:** Circuit breaker, failover, and health (see §5.4.1).
+
+### 5.4.1 AgentOps (Circuit Breaker, Failover, Health)
+
+**Purpose:** Keep the system available when one or more agent pools fail. AgentOps provides **circuit breakers** (stop calling failing agents for a cooldown period), **failover** (try a fallback agent on failure), and a **health endpoint** that reports agent and MCP status so load balancers and runbooks can react.
+
+**Reactive circuit breaking (no proactive health checks)**
+
+The supervisor **does not** run background health checks or ping agents. Circuit state is updated **only when the supervisor invokes an agent** as part of handling a user request: success → `record_success` (circuit stays closed or closes from half_open); exception → `record_failure` (after N consecutive failures, circuit opens). So “agent unhealthy” means “the last N **invocations** of that agent failed”; there is no separate health-check loop. This **reactive** approach is the standard circuit-breaker model (e.g. Nygard, Hystrix, resilience4j): the circuit wraps the real call and opens/closes from call outcomes. Optional **proactive** health checks (e.g. a background task that periodically pings agents) could be added on top; they are not implemented here.
+
+**How circuit state is updated (reactive only)**
+
+```mermaid
+flowchart LR
+    subgraph Request["Per user request"]
+        U[User message]
+        R[Route: pick agent<br/>skip if circuit open]
+        I[Invoke agent]
+        O{Outcome}
+        U --> R --> I --> O
+    end
+
+    subgraph State["Circuit state (updated only here)"]
+        S[record_success or<br/>record_failure]
+    end
+
+    O -->|Success| S
+    O -->|Exception| S
+    S -.->|Next request: route reads state| R
+```
+
+- **Route** only *reads* circuit state (skip agents with circuit open). It does not *update* state.
+- **Invoke** is the only place that *updates* state: after each agent call, we call `record_success` or `record_failure`. So “health” is inferred from invocation outcomes, not from a separate check.
+
+**Implemented (this repo):**
+
+| Component | Role |
+|-----------|------|
+| **Circuit breaker** | Per-agent state: **closed** (normal), **open** (too many failures; do not call), **half_open** (cooldown elapsed; allow one probe). State is updated **only on invocation** (reactive; no background health checks). After `CIRCUIT_BREAKER_FAILURE_THRESHOLD` consecutive failures, circuit opens; after `CIRCUIT_BREAKER_COOLDOWN_SECONDS`, it becomes half_open; one success closes it, one failure re-opens it. Implemented in `src/agent_ops/circuit_breaker.py`. |
+| **Route** | When AgentOps is enabled, the supervisor **route** node skips agents whose circuit is **open**, so traffic is not sent to a known-bad pool. |
+| **Invoke + failover** | On agent invocation failure: record failure (circuit breaker), then if **failover** is enabled, invoke the **fallback agent** (default: `support`). If fallback also fails, return a friendly message and set `needs_escalation`. Success is recorded so the circuit can close. |
+| **Health endpoint** | `GET /health` returns `{"status": "ok" \| "degraded", "agents": {agent_id: "healthy" \| "circuit_open" \| "half_open"}, "mcp": "ok" \| "unavailable"}`. Returns **503** when status is **degraded** (e.g. at least one agent circuit_open or MCP down), so load balancers can mark the instance unhealthy or alert. |
+
+**Configuration (env):**
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `AGENT_OPS_ENABLED` | `true` | Enable circuit breaker and failover. |
+| `CIRCUIT_BREAKER_FAILURE_THRESHOLD` | `3` | Consecutive failures before opening the circuit. |
+| `CIRCUIT_BREAKER_COOLDOWN_SECONDS` | `60` | Seconds before transitioning open → half_open. |
+| `FAILOVER_ENABLED` | `true` | On agent failure, try fallback agent. |
+| `FAILOVER_FALLBACK_AGENT_ID` | `support` | Agent to use when primary fails. |
+| `AGENT_INVOCATION_TIMEOUT_SECONDS` | `30` | Reserved for future per-call timeout. |
+
+**AgentOps flow (circuit breaker + failover)**
+
+```mermaid
+flowchart TB
+    subgraph Route["Route node"]
+        R[Suggested agents]
+        F[Filter by circuit: skip open]
+        R --> F
+    end
+
+    subgraph Invoke["Invoke agent node"]
+        I[Invoke primary agent]
+        OK{Success?}
+        CB[Record failure<br/>Circuit breaker]
+        FO[Try fallback agent]
+        FOOK{Success?}
+        ESC[Return friendly message<br/>+ needs_escalation]
+        I --> OK
+        OK -->|Yes| RS[Record success]
+        OK -->|No| CB
+        CB --> FO
+        FO --> FOOK
+        FOOK -->|Yes| RS
+        FOOK -->|No| CB2[Record fallback failure]
+        CB2 --> ESC
+    end
+
+    Route --> Invoke
+```
+
+**Health response (example):**
+
+- **All healthy:** `200` — `{"status": "ok", "agents": {"support": "healthy", "billing": "healthy"}, "mcp": "ok"}`.
+- **One agent circuit open:** `503` — `{"status": "degraded", "agents": {"support": "healthy", "billing": "circuit_open"}, "mcp": "ok"}`.
+
+**Files:** `src/agent_ops/` (circuit_breaker, health), `src/config.py` (AgentOps env), `src/supervisor.py` (route filter + invoke failover), `src/api.py` (circuit breaker wiring, `/health` payload).
 
 ### 5.5 Conversation History Query API (GraphQL)
 
@@ -499,6 +624,73 @@ flowchart TB
 | **Types** | `Turn` (role, content, metadata_json), `Conversation` (session_id, turns), `SessionInfo` (session_id). |
 | **Context** | GraphQL context provides `conversation_store` so resolvers call `get_history` and `list_sessions` on the shared store. |
 
+### 5.6 RAG Ingestion (PDF → Weaviate)
+
+**Purpose:** Populate the Weaviate RAG collection from PDF files so agents can retrieve grounded context. Implemented in `src/ingestion/` (CLI: `python -m src.ingestion --input-dir docs`).
+
+**Ingestion pipeline**
+
+```mermaid
+flowchart LR
+    subgraph Input["Input"]
+        DIR[PDF directory<br/>e.g. docs/]
+    end
+
+    subgraph Ingest["Ingestion (src/ingestion)"]
+        LIST[list_pdfs]
+        EXTRACT[extract_text_from_pdf<br/>pypdf, per page]
+        CHUNK[chunk_text<br/>size + overlap, boundaries]
+        WRITE[insert_chunks_weaviate]
+    end
+
+    subgraph Store["Weaviate"]
+        COL[(Collection RAGChunks<br/>content, source)]
+        VEC[text2vec-openai<br/>embed on insert]
+    end
+
+    DIR --> LIST
+    LIST --> EXTRACT
+    EXTRACT --> CHUNK
+    CHUNK --> WRITE
+    WRITE --> COL
+    COL --> VEC
+```
+
+**Chunking strategy (overlap and boundaries)**
+
+```mermaid
+flowchart TB
+    subgraph Text["Document text"]
+        T["Full text (pages concatenated)"]
+    end
+
+    subgraph Boundaries["Split points (priority order)"]
+        B1["Paragraph (\\n\\n+)"]
+        B2["Newline (\\n)"]
+        B3["Sentence ([.!?]\\s+)"]
+        B4["Word (\\s+)"]
+    end
+
+    subgraph Chunks["Chunks (overlapping)"]
+        C1["Chunk 1 ~500 chars"]
+        C2["Chunk 2 ~500 chars (50 char overlap)"]
+        C3["Chunk 3 ..."]
+    end
+
+    T --> Boundaries
+    Boundaries -->|"end snapped to nearest break"| C1
+    C1 -->|"start = end - overlap"| C2
+    C2 --> C3
+```
+
+| Step | Description |
+|------|-------------|
+| **Load** | PDFs are read from a directory (e.g. `docs/`); text is extracted per page via **pypdf**. |
+| **Chunk** | Text is split into overlapping segments using **boundary-aware, character-based chunking** (see above). |
+| **Write** | Chunks are inserted into Weaviate with properties `content` and `source` (filename); **text2vec-openai** vectorizer embeds them on insert. |
+
+**Chunking strategy (detail):** Overlapping, boundary-aware, character-based (not token- or embedding-based). Target **chunk size** (default 500 characters) and **overlap** (default 50 characters) are configurable via `--chunk-size` and `--overlap`. Chunk boundaries are snapped to the nearest break in this order: paragraph (`\n\n+`), newline (`\n`), sentence end (`[.!?]\s+`), then space (`\s+`), so chunks do not cut mid-word. Chunks shorter than a minimum (20 characters) are skipped. This keeps retrieval units readable and avoids fragmenting sentences.
+
 ---
 
 ## 6. State and Data Flow Summary
@@ -519,24 +711,25 @@ Data flow in one turn:
 
 ---
 
-## 7. What Will Be Developed (Code Artifacts)
+## 7. Implemented Code Artifacts
 
-The following will be implemented as **pseudo-code / reference code** to show how the full system fits together:
+The following components are **implemented** and form the core of the system:
 
 | # | Artifact | Description |
 |---|----------|-------------|
-| 1 | **Session Router** | Intent classification → suggested agent pool IDs and session_id. **Implemented:** keyword (`KeywordIntentClassifier`) or TensorFlow (`TFIntentClassifier`, `USE_TF_INTENT`). **Production option:** embed → Weaviate query. |
-| 2 | **Agent Registry** | Interface + in-memory (or DynamoDB) implementation: register agents, query by capability. |
+| 1 | **Session Router** | Intent classification → suggested agent pool IDs and session_id. Keyword (`KeywordIntentClassifier`) or TensorFlow (`TFIntentClassifier`, `USE_TF_INTENT`). Production option: embed → Weaviate query. |
+| 2 | **Agent Registry** | Interface + in-memory implementation: register agents, query by capability. |
 | 3 | **Supervisor Graph** | LangGraph graph: state schema, nodes (route, invoke_agent, aggregate, escalate), edges, and checkpointer integration. |
 | 4 | **Agent Pool Subgraphs** | One per pool type (Support, Billing): RAG + LLM **with tools** (tool-calling loop), input/output state. |
-| 5 | **Tools** | **Support:** `search_knowledge_base`, `create_support_ticket`. **Billing:** `look_up_invoice`, `get_refund_status`, `create_refund_request`. LangChain tools bound to LLM; **MCP required** — tools loaded from MCP server (`MCP_SERVER_URL`). |
+| 5 | **Tools** | **Support:** `search_knowledge_base`, `create_support_ticket`. **Billing:** `look_up_invoice`, `get_refund_status`, `create_refund_request`. LangChain tools in `src/tools/support_tools.py`, `billing_tools.py`; **MCP required** — MCP client in `src/tools/mcp_client.py` loads tools from `MCP_SERVER_URL` and merges with built-in. In-repo MCP server: `mcp_server/` (run `python -m mcp_server`; register tools in `mcp_server/server.py`). See `mcp_server/README.md`. |
 | 5a | **RAG (docs + history)** | **Doc RAG:** `RAGService.retrieve(query)` for KB/docs. **History RAG:** `ConversationHistoryRAG` — last N turns for issue handling. **ConversationStore** persists turns for long-term history. |
-| 6 | **Shared Service Interfaces** | RAG, session cache, conversation store: abstract interfaces and stub or minimal real implementations. |
-| 7 | **Entrypoint / API** | Thin API (e.g., FastAPI) that: receives message → calls router → runs supervisor graph → returns response. **GraphQL** at `/graphql` for conversation history: queries `conversation(session_id, limit)` and `sessions(limit)`; see §5.5. |
+| 5b | **AgentOps** | **Circuit breaker** (per-agent: closed/open/half_open), **failover** (fallback agent on failure), **health** (`GET /health` returns agent and MCP status; 503 when degraded). Config: `AGENT_OPS_ENABLED`, `CIRCUIT_BREAKER_*`, `FAILOVER_*`. See §5.4.1. |
+| 6 | **Shared Service Interfaces** | RAG, session cache, conversation store: abstract interfaces with in-memory or minimal implementations. |
+| 7 | **Entrypoint / API** | FastAPI app: receives message → calls router → runs supervisor graph → returns response. **GraphQL** at `/graphql` for conversation history: queries `conversation(session_id, limit)` and `sessions(limit)`; see §5.5. **Health** at `GET /health` with AgentOps status (§5.4.1). |
 
-Optional extensions (as stubs or comments):
+Optional extensions (some as stubs or for future work):
 
-- **MCP (Model Context Protocol) — required:** Load tools from an MCP server (`MCP_SERVER_URL`); `langchain-mcp-adapters` merges MCP tools with built-in tools. System fails if MCP is not configured.
+- **MCP (Model Context Protocol) — required:** Load tools from an MCP server (`MCP_SERVER_URL`); `langchain-mcp-adapters` merges MCP tools with built-in tools. System fails if MCP is not configured. Use the in-repo server `mcp_server/` to register MCP tools (see Architecture diagrams “Tools + MCP” and implementation mapping in §1.2).
 - **Async queue (Kafka/SQS):** Decouple gateway → supervisor and supervisor → agent for high throughput.
 - **Circuit breaker:** Wrap agent calls; on failure, mark pool unhealthy in registry.
 - **Model tiering:** Config in registry (e.g., `model: "gpt-4o-mini"` vs `"gpt-4o"`) and use in agent nodes.
@@ -551,7 +744,7 @@ Optional extensions (as stubs or comments):
 - **Concurrency:** Stateless supervisor and agents; scale pods by CPU/queue depth; optional Kafka for async.
 - **State:** Hierarchical (orchestrator = global, agents = local); checkpointer + Redis for durability and low token reuse.
 - **Cost/Latency:** Model tiering, intent caching, and RAG only when needed → target P99 &lt;3s, high token savings.
-- **Reliability:** Circuit breakers, health checks, and optional de-hallucination or voting agents for critical paths.
+- **Reliability:** **AgentOps** (circuit breaker, failover, health) — see §5.4.1. Plus optional de-hallucination or voting agents for critical paths.
 
 ---
 
@@ -690,7 +883,7 @@ Below is a **sample Langfuse matrix**: which **traces/spans** we create, which *
 | `relevance` | Reply addresses the user question | Judge: “Rate 0–1 how relevant the answer is to the question.” |
 | `hallucination_risk` | Risk that the reply contains unsupported or false content | 1 − faithfulness, or dedicated hallucination classifier. |
 
-**Example Langfuse usage (pseudo-code):**
+**Example Langfuse usage (conceptual):**
 
 ```python
 # After agent produces a response (conceptually)
@@ -808,7 +1001,9 @@ Use **both**: Langfuse/LangSmith for “is the agent answering correctly?” and
 - **Section 2:** End-to-end flow from users through four layers to shared services.
 - **Section 3:** Sequence of a single request: router (intent: keyword/TF/Weaviate), agent (returns response + last_rag_context), supervisor aggregate (FaithfulnessScorer), then persist and response.
 - **Section 4:** Deployment diagram — supervisors and agents on multiple VMs/pods and regions; shared services.
+- **Section 5.5:** GraphQL conversation history — request flow (clients → /graphql → resolvers → ConversationStore) and schema shape (queries and types).
+- **Section 5.6:** RAG ingestion — pipeline (PDF dir → list → extract → chunk → Weaviate) and chunking strategy (boundaries, overlap).
 - **Section 9:** Runtime correctness and hallucination measurement; **hallucination handling flow** (diagram: agent → supervisor aggregate → TFFaithfulnessScorer → threshold → return or escalate); observability with Langfuse or LangSmith; where traces and scores are attached.
 - **Section 10:** Infrastructure and performance observability — how to observe VM/pod memory, CPU, and other performance parameters (Prometheus + Grafana, AWS CloudWatch, or Azure Monitor).
 
-Together, this design and the planned code artifacts describe a **production-style**, LangGraph- and LLM-based agentic framework that can scale to many users and many agents while keeping the implementation clear and modular.
+Together, this design and the implemented code artifacts describe a **production-style**, LangGraph- and LLM-based agentic framework that scales to many users and many agents while keeping the implementation clear and modular.

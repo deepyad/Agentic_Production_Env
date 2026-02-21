@@ -24,3 +24,4 @@ Thumbs.db
 *.log
 .env.local
 *.local
+.git_commit_msg.txt

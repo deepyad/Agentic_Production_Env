@@ -1,5 +1,5 @@
 """Supervisor LangGraph graph: route → invoke_agent → aggregate → (optional) escalate."""
-from typing import Annotated, Any, Literal, TypedDict
+from typing import Annotated, Any, Literal, Optional, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langgraph.graph import END, StateGraph
@@ -17,6 +17,7 @@ from .shared_services.faithfulness import (
     StubFaithfulnessScorer,
     TFFaithfulnessScorer,
 )
+from .agent_ops.circuit_breaker import CircuitBreaker
 
 
 class SupervisorState(TypedDict, total=False):
@@ -37,8 +38,12 @@ def create_supervisor_graph(
     registry: AgentRegistry | None = None,
     rag=None,
     faithfulness_scorer: FaithfulnessScorer | None = None,
+    circuit_breaker: Optional[CircuitBreaker] = None,
 ) -> StateGraph:
-    """Create the supervisor LangGraph graph with route, invoke_agent, aggregate, escalate."""
+    """Create the supervisor LangGraph graph with route, invoke_agent, aggregate, escalate.
+    When circuit_breaker is provided and agent_ops_enabled, route skips open circuits and
+    invoke_agent uses failover on failure.
+    """
 
     router = router or SessionRouter()
     registry = registry or InMemoryAgentRegistry()
@@ -48,31 +53,67 @@ def create_supervisor_graph(
         if config.use_tf_faithfulness
         else StubFaithfulnessScorer()
     )
+    use_ops = config.agent_ops_enabled and circuit_breaker is not None
+    fallback_id = config.failover_fallback_agent_id
 
     support_agent = create_support_agent(rag=rag)
     billing_agent = create_billing_agent(rag=rag)
     agents_map = {"support": support_agent, "billing": billing_agent}
 
     def route_node(state: dict[str, Any]) -> dict[str, Any]:
-        """Use router suggestions or first suggested agent. Production: LLM to pick from registry."""
+        """Use router suggestions; skip agents with open circuit when AgentOps enabled."""
         suggested = state.get("suggested_agent_ids", ["support"])
-        # Pick first suggested agent that exists
+        for aid in suggested:
+            if aid not in agents_map:
+                continue
+            if use_ops and not circuit_breaker.is_available(aid):
+                continue
+            return {"current_agent": aid}
+        # No available suggested agent: pick first existing (may be circuit-open; invoke_agent will failover)
         for aid in suggested:
             if aid in agents_map:
                 return {"current_agent": aid}
         return {"current_agent": "support"}
 
     def invoke_agent_node(state: dict[str, Any]) -> dict[str, Any]:
-        """Invoke the chosen agent pool subgraph."""
+        """Invoke the chosen agent; on failure record and optionally failover to fallback agent."""
         agent_id = state.get("current_agent", "support")
         agent = agents_map.get(agent_id, support_agent)
-        result = agent(state)
-        return {
-            "messages": result.get("messages", []),
-            "resolved": result.get("resolved", False),
-            "needs_escalation": result.get("needs_escalation", False),
-            "last_rag_context": result.get("last_rag_context", ""),
-        }
+        fallback_agent = agents_map.get(fallback_id, support_agent) if fallback_id != agent_id else None
+
+        def run_agent(agt: Any, aid: str) -> dict[str, Any]:
+            result = agt(state)
+            if use_ops:
+                circuit_breaker.record_success(aid)
+            return {
+                "messages": result.get("messages", []),
+                "resolved": result.get("resolved", False),
+                "needs_escalation": result.get("needs_escalation", False),
+                "last_rag_context": result.get("last_rag_context", ""),
+            }
+
+        try:
+            return run_agent(agent, agent_id)
+        except Exception:
+            if use_ops:
+                circuit_breaker.record_failure(agent_id)
+            if config.failover_enabled and fallback_agent is not None and use_ops:
+                try:
+                    return run_agent(fallback_agent, fallback_id)
+                except Exception:
+                    if use_ops:
+                        circuit_breaker.record_failure(fallback_id)
+            # All failed: return friendly message and escalate
+            return {
+                "messages": [
+                    AIMessage(
+                        content="I'm sorry, I'm having trouble right now. Please try again in a moment or contact support directly."
+                    )
+                ],
+                "resolved": False,
+                "needs_escalation": True,
+                "last_rag_context": "",
+            }
 
     def aggregate_node(state: dict[str, Any]) -> dict[str, Any]:
         """Merge agent response into state. Run faithfulness scorer; if score < threshold, escalate."""
@@ -124,7 +165,8 @@ def build_supervisor(
     router: SessionRouter | None = None,
     registry: AgentRegistry | None = None,
     use_checkpointer: bool = True,
+    circuit_breaker: Optional[CircuitBreaker] = None,
 ) -> Any:
-    """Build compiled supervisor graph with optional in-memory checkpointer."""
-    graph = create_supervisor_graph(router=router, registry=registry)
+    """Build compiled supervisor graph with optional in-memory checkpointer and AgentOps circuit breaker."""
+    graph = create_supervisor_graph(router=router, registry=registry, circuit_breaker=circuit_breaker)
     return graph.compile(checkpointer=MemorySaver() if use_checkpointer else None)

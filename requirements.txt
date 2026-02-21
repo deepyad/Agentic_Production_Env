@@ -17,9 +17,14 @@ pydantic>=2.0.0
 
 # MCP (Model Context Protocol) — required; load tools from MCP servers
 langchain-mcp-adapters>=0.2.0
+# MCP Python SDK — for running the in-repo MCP server (mcp_server/)
+mcp>=1.0.0
 
-# Optional: Weaviate for RAG and router (stub used if not installed)
-# weaviate-client>=4.0.0
+# RAG ingestion (PDF → Weaviate)
+pypdf>=4.0.0
+weaviate-client>=4.0.0
+
+# Optional: Redis for session store
 # redis>=5.0.0
 
 # Optional: TensorFlow for intent classifier (router). Use keyword router if not installed.

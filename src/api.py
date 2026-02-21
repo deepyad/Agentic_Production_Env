@@ -3,21 +3,36 @@ from typing import Optional
 
 import strawberry
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
 from strawberry.fastapi import GraphQLRouter
 
+from .config import config
 from .router import SessionRouter, RouterResult
 from .supervisor import build_supervisor
 from .shared_services.conversation_store import ConversationStore, InMemoryConversationStore
 from .graphql.conversation_schema import Query as GraphQLQuery
+from .agent_ops import CircuitBreaker, get_agent_ops_health
 
 # --- App setup ---
 
 app = FastAPI(title="Agentic Production Framework", version="0.1.0")
 router_svc = SessionRouter()
-supervisor = build_supervisor(use_checkpointer=True)
+
+# AgentOps: circuit breaker shared between supervisor and /health
+circuit_breaker: Optional[CircuitBreaker] = None
+if config.agent_ops_enabled:
+    circuit_breaker = CircuitBreaker(
+        failure_threshold=config.circuit_breaker_failure_threshold,
+        cooldown_seconds=config.circuit_breaker_cooldown_seconds,
+    )
+
+supervisor = build_supervisor(use_checkpointer=True, circuit_breaker=circuit_breaker)
 conversation_store: ConversationStore = InMemoryConversationStore()
+
+# Agent IDs used by supervisor (for health reporting)
+AGENT_IDS = ["support", "billing"]
 
 # GraphQL: conversation history query API at /graphql
 graphql_schema = strawberry.Schema(GraphQLQuery)
@@ -49,7 +64,19 @@ class ChatResponse(BaseModel):
 
 @app.get("/health")
 def health():
-    """Health check."""
+    """
+    Health check. When AgentOps is enabled, returns agent circuit states and MCP status.
+    status: ok | degraded (e.g. one or more agents circuit_open or MCP unavailable).
+    Returns 503 when status is degraded.
+    """
+    if circuit_breaker is not None:
+        payload = get_agent_ops_health(
+            circuit_breaker=circuit_breaker,
+            agent_ids=AGENT_IDS,
+            mcp_available=True,  # Assumed ok if app started; extend to probe MCP if needed
+        )
+        status_code = 200 if payload["status"] == "ok" else 503
+        return JSONResponse(content=payload, status_code=status_code)
     return {"status": "ok"}
 
 

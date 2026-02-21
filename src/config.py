@@ -26,5 +26,13 @@ class Config:
     use_tf_faithfulness: bool = os.getenv("USE_TF_FAITHFULNESS", "false").lower() in ("true", "1", "yes")
     tf_faithfulness_model_path: str = os.getenv("TF_FAITHFULNESS_MODEL_PATH", "")
 
+    # AgentOps: circuit breaker and failover
+    agent_ops_enabled: bool = os.getenv("AGENT_OPS_ENABLED", "true").lower() in ("true", "1", "yes")
+    circuit_breaker_failure_threshold: int = int(os.getenv("CIRCUIT_BREAKER_FAILURE_THRESHOLD", "3"))
+    circuit_breaker_cooldown_seconds: float = float(os.getenv("CIRCUIT_BREAKER_COOLDOWN_SECONDS", "60"))
+    failover_enabled: bool = os.getenv("FAILOVER_ENABLED", "true").lower() in ("true", "1", "yes")
+    failover_fallback_agent_id: str = os.getenv("FAILOVER_FALLBACK_AGENT_ID", "support")
+    agent_invocation_timeout_seconds: float = float(os.getenv("AGENT_INVOCATION_TIMEOUT_SECONDS", "30"))
+
 
 config = Config()
