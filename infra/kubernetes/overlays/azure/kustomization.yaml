@@ -1,0 +1,12 @@
+# Azure overlay: use image from Azure Container Registry (ACR).
+# Replace YOUR_ACR_NAME with your ACR login name (e.g. myregistry for myregistry.azurecr.io),
+# or run infra/scripts/azure-deploy.sh YOUR_ACR_NAME
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: agentic
+resources:
+  - ../../base
+images:
+  - name: agentic-api:latest
+    newName: YOUR_ACR_NAME.azurecr.io/agentic-api
+    newTag: latest

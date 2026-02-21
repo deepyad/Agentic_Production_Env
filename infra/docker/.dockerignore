@@ -1,0 +1,30 @@
+# Git and IDE
+.git
+.gitignore
+.cursor
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.coverage
+htmlcov
+
+# Docs and infra (not needed in image)
+Documentation/
+infra/
+*.md
+Architecture
+
+# Local runtime / models (mount or build separately if needed)
+.env
+.env.*
+!.env.example
+.intent_model/
+.faithfulness_model/
+
+# Tests
+tests/
+*_test.py
+test_*.py

@@ -1,0 +1,18 @@
+# Non-sensitive app config. Override in cluster or use env from Secret.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentic-api-config
+  namespace: agentic
+  labels:
+    app: agentic-api
+data:
+  DEFAULT_MODEL: "gpt-4o-mini"
+  HALLUCINATION_THRESHOLD_FAITHFULNESS: "0.8"
+  HALLUCINATION_THRESHOLD_CONFIDENCE: "0.7"
+  TOP_P: "0.9"
+  GUARDRAILS_ENABLED: "true"
+  USE_TF_INTENT: "false"
+  USE_TF_FAITHFULNESS: "false"
+  # WEAVIATE_URL: "http://weaviate.agentic.svc.cluster.local:8080"
+  # WEAVIATE_INDEX: "RAGChunks"

@@ -1,0 +1,26 @@
+# Agentic Production Framework — Dependencies
+
+# LangGraph & LangChain
+langgraph>=0.2.0
+langchain>=0.3.0
+langchain-openai>=0.2.0
+langchain-core>=0.3.0
+
+# API
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+strawberry-graphql[fastapi]>=0.220.0
+
+# Utilities
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+
+# MCP (Model Context Protocol) — required; load tools from MCP servers
+langchain-mcp-adapters>=0.2.0
+
+# Optional: Weaviate for RAG and router (stub used if not installed)
+# weaviate-client>=4.0.0
+# redis>=5.0.0
+
+# Optional: TensorFlow for intent classifier (router). Use keyword router if not installed.
+# tensorflow>=2.15.0

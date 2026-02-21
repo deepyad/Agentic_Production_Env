@@ -1,0 +1,28 @@
+# Optional: expose API via Ingress. Adjust ingressClassName and host for your cluster.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agentic-api-ingress
+  namespace: agentic
+  labels:
+    app: agentic-api
+  annotations:
+    # nginx.ingress.kubernetes.io/rewrite-target: /
+    # cert-manager.io/cluster-issuer: letsencrypt-prod  # if using cert-manager
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: agentic-api.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: agentic-api
+                port:
+                  number: 8000
+  # tls:
+  #   - hosts:
+  #       - agentic-api.example.com
+  #     secretName: agentic-api-tls

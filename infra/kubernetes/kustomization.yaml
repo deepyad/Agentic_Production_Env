@@ -1,0 +1,10 @@
+# Apply all: kubectl apply -k infra/kubernetes
+# Azure (ACR): kubectl apply -k infra/kubernetes/overlays/azure (edit ACR name in that kustomization first)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: agentic
+resources:
+  - base
+commonLabels:
+  app.kubernetes.io/name: agentic-production
+  app.kubernetes.io/component: api
