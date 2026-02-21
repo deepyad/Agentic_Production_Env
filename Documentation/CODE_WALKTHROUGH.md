@@ -383,6 +383,8 @@ High-level: **Client → POST /chat → Router → Supervisor graph → Agent �
 - **Output filtering (`_OUTPUT_BLOCK_PATTERNS`):** Frozen set: `"internal api key"`, `"secret token"`, `"admin password"`. Output is **never** rejected; instead, each occurrence of a pattern is **replaced** with `"[content removed]"` (case-insensitive find, replace in string, then re-check lowercased string for next pattern). After that, if length exceeds `_MAX_OUTPUT_LEN` (4000), the text is truncated to 4000 chars and `"\n[...truncated]"` is appended. Returns `GuardrailResult(passed=True, filtered_text=filtered)`.
 - **Flow:** Support and Billing agents call `guard_input(query)` at the start of `__call__`; if not passed, they return immediately with a fixed message. After the LLM/tool loop they call `guard_output(content)` and use `.filtered_text` as the final reply content.
 
+- **Prompt-injection patterns:** `SimpleGuardrailService` also blocks common injection/jailbreak phrases (e.g. “ignore previous instructions”, “disregard your instructions”) and rejects input longer than 8000 chars. See ARCHITECTURE_DESIGN for optional third-party libraries (Guardrails AI, LLM Guard, etc.) that implement the same interface for stronger runtime checks. **Giskard** is for **CI/pre-release scanning** only (it does not run on each user request in production); use it in tests to find vulnerabilities before deploy.
+
 ---
 
 ### 3.18 `src/shared_services/rag.py` (detailed)

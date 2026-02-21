@@ -487,7 +487,20 @@ flowchart LR
 - **RAG service interface:** `retrieve(query: str, top_k: int, filters?: dict)` → list of chunks. Production implementation uses **Weaviate**.
 - **Intent classifier interface:** `IntentClassifier.classify(message)` → suggested agent pool IDs. Implementations: `KeywordIntentClassifier`, `TFIntentClassifier` (TensorFlow/Keras), or Weaviate-based semantic lookup.
 - **Faithfulness scorer interface:** `FaithfulnessScorer.score(response, context)` → 0–1. **TFFaithfulnessScorer** (TensorFlow/Keras) is used in supervisor aggregate when `USE_TF_FAITHFULNESS=true`; default `StubFaithfulnessScorer` returns 1.0.
-- **Guardrail service:** `guard_input(text)` and `guard_output(text)` block off-topic or policy-violating content; `SimpleGuardrailService` for keyword-based checks, or `guardrails-ai` for richer validators.
+- **Guardrail service:** `guard_input(text)` and `guard_output(text)` block off-topic or policy-violating content; `SimpleGuardrailService` for keyword-based checks, or a third-party library for stronger detection. **Prompt-injection / unlawful behavior:** To reduce the risk of users manipulating the agent (e.g. “ignore previous instructions”, jailbreak phrases), `guard_input` also blocks common injection patterns and rejects very long input. Agent system prompts instruct the model to not follow instructions embedded in the user message and to refuse out-of-scope requests. For production, you can plug in one of the following **libraries and tools** (all implement or complement input/output guardrails and prompt-injection detection):
+
+  | Library / tool | What it does | Notes |
+  |----------------|--------------|--------|
+  | **Guardrails AI** | Validators (e.g. `detect_prompt_injection`), Pydantic output parsing, topic/toxicity checks. | Python; validator hub; can replace or wrap `GuardrailService`. |
+  | **LLM Guard** (Protect AI) | Input/output sanitization, harmful content detection, prompt-injection resistance, data leakage prevention. | Open-source; pip install; production-oriented. |
+  | **Rebuff** | Prompt-injection detector (heuristics + optional LLM). | Python & JS SDKs; playground at rebuff.ai. |
+  | **OpenAI Guardrails (Python)** | LLM-based prompt-injection detection; validates outputs and tool calls at configurable checkpoints. | OpenAI’s guardrails package; confidence thresholds, optional reasoning. |
+  | **Giskard** | **LLM Scan**: automated security testing for LLMs (prompt injection, robustness). Heuristics + LLM-assisted detectors; tests for character injection, jailbreaks, RAG/QA vulnerabilities. | Open-source; Python; good for pre-release scanning and CI; maintains prompt-injection dataset on GitHub (`giskard-ai/prompt-injections`). |
+  | **OWASP LLM Prompt Injection Cheat Sheet** | Patterns, attack vectors (direct/indirect injection, encoding, jailbreaks), and mitigation guidance. | Reference only; no library. |
+
+  **Runtime vs CI/scan:** **Runtime guardrails** (Guardrails AI, LLM Guard, Rebuff, OpenAI Guardrails, or in-repo `SimpleGuardrailService`) run **on every user request** in production: the agent calls `guard_input(user_message)` and `guard_output(agent_reply)` in the request path, so live traffic is checked and blocked or filtered in real time. **Giskard** is different: it is used for **offline / CI scanning** only (e.g. run a security scan in tests or before release). Giskard does **not** sit in the production request path and does **not** check each user request continuously; it helps find vulnerabilities in your agent before you deploy. For continuous protection in production, use a runtime guardrail; for pre-release checks, add Giskard (or similar) to your CI pipeline. You can use both: runtime guardrails on every request plus Giskard in CI to catch new attack patterns.
+
+  The in-repo `SimpleGuardrailService` remains a lightweight, dependency-free option; for stricter security, implement `GuardrailService` using one of the runtime libraries above or combine keyword rules with an LLM-based classifier.
 - **Session store interface:** `get(session_id)`, `set(session_id, state, ttl)`, used by LangGraph checkpointer.
 - **Conversation store interface:** `append_turn(session_id, role, content, metadata)`, `get_history(session_id)`, `list_sessions(limit)`.
 - **AgentOps:** Circuit breaker, failover, and health (see §5.4.1).

@@ -83,7 +83,7 @@ MCP is required: set `MCP_SERVER_URL` (e.g. `http://localhost:3000/mcp`) in `.en
 
 ## Guardrails
 
-Input/output guardrails block off-topic or policy-violating content. Enabled by default (`GUARDRAILS_ENABLED=true`). `guard_input` runs on the user message before the agent; `guard_output` filters the agent reply. Use `SimpleGuardrailService` (keyword-based) or plug in a custom `GuardrailService`.
+Input/output guardrails block off-topic, policy-violating, and prompt-injection content. Enabled by default (`GUARDRAILS_ENABLED=true`). **Runtime guardrails** run on **every user request** in production: `guard_input` on the user message before the agent, `guard_output` on the agent reply. Use `SimpleGuardrailService` (keyword-based) or plug in a third-party implementation (Guardrails AI, LLM Guard — see ARCHITECTURE_DESIGN). **Giskard** is for **CI/scanning only** (finds vulnerabilities before release); it does not check live traffic. For continuous protection in production, use runtime guardrails; for pre-release checks, add Giskard to CI.
 
 ## Router Intent
 
