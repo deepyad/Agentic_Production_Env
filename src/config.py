@@ -44,5 +44,10 @@ class Config:
     hitl_handler: str = os.getenv("HITL_HANDLER", "ticket").strip().lower() or "stub"  # stub | ticket | email
     hitl_email_to: str = os.getenv("HITL_EMAIL_TO", "").strip()
 
+    # LangGraph checkpointer: Redis for production (reduces pod memory, survives restarts). Empty = in-memory.
+    redis_url: str = os.getenv("REDIS_URL", "").strip()
+    # Session checkpoint TTL in minutes (e.g. 1440 = 24h). Only used when redis_url is set. 0 = no expiry.
+    checkpoint_ttl_minutes: int = int(os.getenv("CHECKPOINT_TTL_MINUTES", "1440"))
+
 
 config = Config()

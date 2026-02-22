@@ -598,6 +598,11 @@ flowchart TB
 
 **Purpose:** Expose conversation history for dashboards, admin UIs, and analytics via a read-only GraphQL API so clients can request exactly the fields they need (e.g. session list, or full turns for a session).
 
+**Ways you can say it:**
+- “GraphQL is used to **query** user chat history (and list sessions).”
+- “GraphQL is used to **retrieve** user chat history for dashboards and analytics.”
+- “GraphQL is used to **access** user chat history so UIs can show past conversations.”
+
 **Request flow (GraphQL conversation history)**
 
 ```mermaid

@@ -136,7 +136,7 @@ High-level: **Client → POST /chat → Router → Supervisor graph → Agent �
   - **GET /health:** When AgentOps enabled, returns `{"status": "ok"|"degraded", "agents": {...}, "mcp": "ok"|"unavailable"}` and 503 when degraded; otherwise `{"status": "ok"}`.
   - **POST /chat:** (see Section 2)
     1. Calls `router_svc.route()` → `RouterResult`.
-    2. Builds `initial_state` and `config` (thread_id for checkpointer).
+    2. Builds `initial_state` (messages, session_id, user_id, suggested_agent_ids) and `config` (thread_id for checkpointer). See §3.6 for where the full supervisor state is defined and persisted.
     3. `supervisor.invoke(initial_state, config)`.
     4. Takes last AI message as `reply`, `agent_id` from result.
     5. Appends user and assistant turns to `conversation_store`.
@@ -197,7 +197,14 @@ High-level: **Client → POST /chat → Router → Supervisor graph → Agent �
 ### 3.6 `src/supervisor.py`
 
 - **Purpose:** LangGraph supervisor: (optional) plan → route → invoke_agent → aggregate → (optional) escalate.
-- **State:** `SupervisorState` (messages, current_agent, session_id, user_id, suggested_agent_ids, planned_agent_ids, metadata, needs_escalation, resolved, last_rag_context).
+- **State:** `SupervisorState` (messages, current_agent, session_id, user_id, suggested_agent_ids, planned_agent_ids, metadata, needs_escalation, escalation_reason, resolved, last_rag_context).
+
+**Where state is maintained:**
+- **Schema:** State shape is defined in **`src/supervisor.py`** as the `SupervisorState` TypedDict (messages, current_agent, session_id, user_id, suggested_agent_ids, planned_agent_ids, metadata, needs_escalation, escalation_reason, resolved, last_rag_context).
+- **Initial values:** **`src/api.py`** builds `initial_state` for each request: `messages` (one HumanMessage), `session_id` (= thread_id), `user_id`, `suggested_agent_ids` (from router). Other fields are set by graph nodes or carried over from the checkpointer.
+- **Persistence:** State is stored in the **checkpointer** (`MemorySaver()` when `use_checkpointer=True`). LangGraph keys it by `config["configurable"]["thread_id"]` (same as session_id). On each request it loads previous state for that thread, merges with `initial_state`, runs the graph, and saves the result — so conversation history (messages, etc.) is maintained across turns.
+- **Who updates what:** `plan_node` → planned_agent_ids; `route_node` → current_agent; `invoke_agent_node` → messages, resolved, needs_escalation, last_rag_context (and on failure can set needs_escalation); `aggregate_node` → needs_escalation, escalation_reason (e.g. low_faithfulness); `escalate_node` → messages (appends “connecting you with a human agent”). Session_id and user_id come from the API and are not changed by nodes.
+
 - **Graph construction (`create_supervisor_graph`):**
   - Creates Support and Billing agents via `create_support_agent(rag)`, `create_billing_agent(rag)`; `agents_map = {"support": ..., "billing": ...}`.
   - **plan_node:** When `USE_PLANNING=true`, LLM picks which agent (support or billing) should handle the message; returns `{ planned_agent_ids: [agent_id] }`. When disabled, no-op.

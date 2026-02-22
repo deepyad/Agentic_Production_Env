@@ -9,6 +9,24 @@ from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import MemorySaver
 
 from .config import config
+
+
+def _make_checkpointer(use_checkpointer: bool):
+    """Return Redis checkpointer if REDIS_URL is set, else in-memory or None."""
+    if not use_checkpointer:
+        return None
+    if config.redis_url:
+        from langgraph.checkpoint.redis import RedisSaver
+        ttl_config = None
+        if config.checkpoint_ttl_minutes > 0:
+            ttl_config = {
+                "default_ttl": config.checkpoint_ttl_minutes,
+                "refresh_on_read": True,
+            }
+        saver = RedisSaver.from_conn_string(config.redis_url, ttl=ttl_config)
+        saver.setup()
+        return saver
+    return MemorySaver()
 from .registry import AgentRegistry, InMemoryAgentRegistry
 from .router import SessionRouter
 from .agents.support import create_support_agent
@@ -222,6 +240,6 @@ def build_supervisor(
     use_checkpointer: bool = True,
     circuit_breaker: Optional[CircuitBreaker] = None,
 ) -> Any:
-    """Build compiled supervisor graph with optional in-memory checkpointer and AgentOps circuit breaker."""
+    """Build compiled supervisor graph. Uses Redis checkpointer if REDIS_URL is set, else in-memory (or none)."""
     graph = create_supervisor_graph(router=router, registry=registry, circuit_breaker=circuit_breaker)
-    return graph.compile(checkpointer=MemorySaver() if use_checkpointer else None)
+    return graph.compile(checkpointer=_make_checkpointer(use_checkpointer))

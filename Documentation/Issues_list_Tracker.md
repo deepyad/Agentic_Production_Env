@@ -2,8 +2,24 @@
 
 This document tracks issues encountered during development and deployment of the Agentic Production Framework, along with their fixes. Written retrospectively for reference.
 
+## Table of Contents
+
+- [1. Hallucination & LLM Quality](#1-hallucination-llm-quality)
+- [2. Performance — Cluster, Pods, Kubernetes](#2-performance-kubernetes)
+- [3. RAG Accuracy & Retrieval](#3-rag-accuracy-retrieval)
+- [4. LLM Latency & Time Delay](#4-llm-latency)
+- [5. MCP & Tools](#5-mcp-tools)
+- [6. Observability & Monitoring](#6-observability-monitoring)
+- [7. Session, State & Persistence](#7-session-state-persistence)
+- [8. Scaling & Throughput](#8-scaling-throughput)
+- [9. Cost & Efficiency](#9-cost-efficiency)
+- [10. Security & Auth](#10-security-auth)
+- [11. API & Features](#11-api-features)
+- [Summary Table](#summary-table)
+
 ---
 
+<a id="1-hallucination-llm-quality"></a>
 ## 1. Hallucination & LLM Quality
 
 ### Issue #001: Agents returning incorrect invoice details
@@ -11,7 +27,7 @@ This document tracks issues encountered during development and deployment of the
 | Field | Details |
 |-------|---------|
 | **Status** | Resolved |
-| **Date** | 2025-01-15 |
+| **Date** | 2025-01-08 |
 | **Severity** | High |
 
 **Description:** Billing agent occasionally returned wrong invoice amounts or dates, despite correct RAG retrieval. Users reported discrepancies.
@@ -31,7 +47,7 @@ This document tracks issues encountered during development and deployment of the
 | Field | Details |
 |-------|---------|
 | **Status** | Resolved |
-| **Date** | 2025-01-22 |
+| **Date** | 2025-01-15 |
 | **Severity** | Medium |
 
 **Description:** Support agent frequently set `needs_escalation=True` and created tickets even for simple FAQ questions that could be resolved from KB.
@@ -51,7 +67,7 @@ This document tracks issues encountered during development and deployment of the
 | Field | Details |
 |-------|---------|
 | **Status** | Resolved |
-| **Date** | 2025-02-01 |
+| **Date** | 2025-02-12 |
 | **Severity** | High |
 
 **Description:** Agents sometimes referenced product names or SKUs not in the KB. Users complained of misleading information.
@@ -66,6 +82,7 @@ This document tracks issues encountered during development and deployment of the
 
 ---
 
+<a id="2-performance-kubernetes"></a>
 ## 2. Performance — Cluster, Pods, Kubernetes
 
 ### Issue #004: Supervisor pods OOMKilled under load
@@ -73,7 +90,7 @@ This document tracks issues encountered during development and deployment of the
 | Field | Details |
 |-------|---------|
 | **Status** | Resolved |
-| **Date** | 2025-01-18 |
+| **Date** | 2025-02-20 |
 | **Severity** | Critical |
 
 **Description:** Supervisor pods restarted frequently during peak (10k+ concurrent users). Logs showed `OOMKilled`.
@@ -93,7 +110,7 @@ This document tracks issues encountered during development and deployment of the
 | Field | Details |
 |-------|---------|
 | **Status** | Resolved |
-| **Date** | 2025-01-25 |
+| **Date** | 2025-03-05 |
 | **Severity** | Medium |
 
 **Description:** Billing and Support agent pods showed high CPU throttling (`container_cpu_cfs_throttled_seconds_total`). Latency P99 increased from 2s to 5s.
@@ -113,7 +130,7 @@ This document tracks issues encountered during development and deployment of the
 | Field | Details |
 |-------|---------|
 | **Status** | Resolved |
-| **Date** | 2025-02-05 |
+| **Date** | 2025-03-18 |
 | **Severity** | Critical |
 
 **Description:** New pods stuck in `Pending`; events showed "0/X nodes available: insufficient memory."
@@ -133,7 +150,7 @@ This document tracks issues encountered during development and deployment of the
 | Field | Details |
 |-------|---------|
 | **Status** | Resolved |
-| **Date** | 2025-01-28 |
+| **Date** | 2025-04-02 |
 | **Severity** | Medium |
 
 **Description:** First request after scaling up took 15–20s; subsequent requests < 2s. Users saw timeouts on first interaction.
@@ -148,6 +165,7 @@ This document tracks issues encountered during development and deployment of the
 
 ---
 
+<a id="3-rag-accuracy-retrieval"></a>
 ## 3. RAG Accuracy & Retrieval
 
 ### Issue #008: RAG returning irrelevant chunks
@@ -155,7 +173,7 @@ This document tracks issues encountered during development and deployment of the
 | Field | Details |
 |-------|---------|
 | **Status** | Resolved |
-| **Date** | 2025-01-12 |
+| **Date** | 2025-04-22 |
 | **Severity** | High |
 
 **Description:** Agents cited KB articles that did not answer the user question. Relevance score low in evals.
@@ -175,7 +193,7 @@ This document tracks issues encountered during development and deployment of the
 | Field | Details |
 |-------|---------|
 | **Status** | Resolved |
-| **Date** | 2025-01-20 |
+| **Date** | 2025-05-10 |
 | **Severity** | Medium |
 
 **Description:** RAG retrieval sometimes took 500–800ms, pushing P99 total latency above 3s target.
@@ -195,7 +213,7 @@ This document tracks issues encountered during development and deployment of the
 | Field | Details |
 |-------|---------|
 | **Status** | Resolved |
-| **Date** | 2025-02-10 |
+| **Date** | 2025-05-28 |
 | **Severity** | Medium |
 
 **Description:** Agents sometimes referred to old invoice IDs or issues from previous turns when user had moved on.
@@ -210,6 +228,7 @@ This document tracks issues encountered during development and deployment of the
 
 ---
 
+<a id="4-llm-latency"></a>
 ## 4. LLM Latency & Time Delay
 
 ### Issue #011: LLM response time > 5s
@@ -217,7 +236,7 @@ This document tracks issues encountered during development and deployment of the
 | Field | Details |
 |-------|---------|
 | **Status** | Resolved |
-| **Date** | 2025-01-14 |
+| **Date** | 2025-06-05 |
 | **Severity** | High |
 
 **Description:** Users reported slow replies. P99 LLM latency was 6–8s during peak.
@@ -235,9 +254,9 @@ This document tracks issues encountered during development and deployment of the
 ### Issue #012: Tool-calling loop adding 3–4s
 
 | Field | Details |
-|-------|--------- |
+|-------|---------|
 | **Status** | Resolved |
-| **Date** | 2025-01-26 |
+| **Date** | 2025-06-20 |
 | **Severity** | Medium |
 
 **Description:** Agent responses with tool use took 6–8s vs 2–3s without tools.
@@ -252,6 +271,7 @@ This document tracks issues encountered during development and deployment of the
 
 ---
 
+<a id="5-mcp-tools"></a>
 ## 5. MCP & Tools
 
 ### Issue #013: MCP connection failures at startup
@@ -259,7 +279,7 @@ This document tracks issues encountered during development and deployment of the
 | Field | Details |
 |-------|---------|
 | **Status** | Resolved |
-| **Date** | 2025-01-10 |
+| **Date** | 2025-07-08 |
 | **Severity** | Critical |
 
 **Description:** API failed to start with "MCP failed to load tools: Connection refused."
@@ -279,7 +299,7 @@ This document tracks issues encountered during development and deployment of the
 | Field | Details |
 |-------|---------|
 | **Status** | Resolved |
-| **Date** | 2025-01-30 |
+| **Date** | 2025-07-25 |
 | **Severity** | Medium |
 
 **Description:** Agent invoked `look_up_invoice` but got empty or "Tool error" in some cases.
@@ -294,6 +314,7 @@ This document tracks issues encountered during development and deployment of the
 
 ---
 
+<a id="6-observability-monitoring"></a>
 ## 6. Observability & Monitoring
 
 ### Issue #015: No visibility into hallucination rate
@@ -301,7 +322,7 @@ This document tracks issues encountered during development and deployment of the
 | Field | Details |
 |-------|---------|
 | **Status** | Resolved |
-| **Date** | 2025-01-08 |
+| **Date** | 2025-08-03 |
 | **Severity** | Medium |
 
 **Description:** Could not quantify how often agents hallucinated. Manual review not scalable.
@@ -321,7 +342,7 @@ This document tracks issues encountered during development and deployment of the
 | Field | Details |
 |-------|---------|
 | **Status** | Resolved |
-| **Date** | 2025-02-08 |
+| **Date** | 2025-08-19 |
 | **Severity** | Low |
 
 **Description:** Hard to link pod OOM or CPU spike to specific user sessions or agents.
@@ -335,6 +356,7 @@ This document tracks issues encountered during development and deployment of the
 
 ---
 
+<a id="7-session-state-persistence"></a>
 ## 7. Session, State & Persistence
 
 ### Issue #017: Conversation state lost after pod restart
@@ -342,7 +364,7 @@ This document tracks issues encountered during development and deployment of the
 | Field | Details |
 |-------|---------|
 | **Status** | Resolved |
-| **Date** | 2025-01-11 |
+| **Date** | 2025-09-02 |
 | **Severity** | High |
 
 **Description:** Users reported agent "forgetting" the conversation after a few minutes. Multi-turn context lost.
@@ -362,7 +384,7 @@ This document tracks issues encountered during development and deployment of the
 | Field | Details |
 |-------|---------|
 | **Status** | Resolved |
-| **Date** | 2025-02-12 |
+| **Date** | 2025-09-22 |
 | **Severity** | Low |
 
 **Description:** ConversationStore sometimes had duplicate turns for same message. Agent saw repeated context.
@@ -376,6 +398,7 @@ This document tracks issues encountered during development and deployment of the
 
 ---
 
+<a id="8-scaling-throughput"></a>
 ## 8. Scaling & Throughput
 
 ### Issue #019: Queue depth growing during peak
@@ -383,7 +406,7 @@ This document tracks issues encountered during development and deployment of the
 | Field | Details |
 |-------|---------|
 | **Status** | Resolved |
-| **Date** | 2025-02-02 |
+| **Date** | 2025-10-10 |
 | **Severity** | High |
 
 **Description:** Kafka queue (gateway → supervisor) depth grew to 10k+; latency increased to 30s+.
@@ -405,7 +428,7 @@ This document tracks issues encountered during development and deployment of the
 | Field | Details |
 |-------|---------|
 | **Status** | Resolved |
-| **Date** | 2025-01-24 |
+| **Date** | 2025-10-28 |
 | **Severity** | Medium |
 
 **Description:** Monthly OpenAI bill exceeded forecast. Token usage high.
@@ -420,6 +443,7 @@ This document tracks issues encountered during development and deployment of the
 
 ---
 
+<a id="10-security-auth"></a>
 ## 10. Security & Auth
 
 ### Issue #021: Session ID predictable
@@ -427,7 +451,7 @@ This document tracks issues encountered during development and deployment of the
 | Field | Details |
 |-------|---------|
 | **Status** | Resolved |
-| **Date** | 2025-02-14 |
+| **Date** | 2025-11-12 |
 | **Severity** | Medium |
 
 **Description:** Security audit found session IDs could be guessed; risk of session hijack.
@@ -442,6 +466,7 @@ This document tracks issues encountered during development and deployment of the
 
 ---
 
+<a id="11-api-features"></a>
 ## 11. API & Features
 
 ### Issue #022: Add GraphQL query API for conversation history (Enhancement)
@@ -449,7 +474,7 @@ This document tracks issues encountered during development and deployment of the
 | Field | Details |
 |-------|---------|
 | **Status** | Resolved |
-| **Date** | 2025-02-20 |
+| **Date** | 2025-12-05 |
 | **Severity** | Low (enhancement) |
 
 **Description:** Need a read-only API for conversation history so dashboards, admin UIs, or analytics can fetch session lists and full conversation turns without REST endpoints per use case.
@@ -464,6 +489,7 @@ This document tracks issues encountered during development and deployment of the
 
 ---
 
+<a id="summary-table"></a>
 ## Summary Table
 
 | # | Category | Issue | Severity | Status |
@@ -492,5 +518,3 @@ This document tracks issues encountered during development and deployment of the
 | 022 | API/Features | GraphQL query API for conversation history | Low (enhancement) | Resolved |
 
 ---
-
-*Document is hypothetical and for reference. Adjust fixes based on actual environment and constraints.*

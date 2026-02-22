@@ -24,8 +24,9 @@ mcp>=1.0.0
 pypdf>=4.0.0
 weaviate-client>=4.0.0
 
-# Optional: Redis for session store
-# redis>=5.0.0
+# LangGraph checkpointer: Redis (production). Requires Redis with RedisJSON + RediSearch (Redis 8+ or Redis Stack).
+langgraph-checkpoint-redis>=0.3.0
+redis>=5.2.0
 
 # Optional: TensorFlow for intent classifier (router). Use keyword router if not installed.
 # tensorflow>=2.15.0
