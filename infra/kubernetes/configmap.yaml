@@ -14,5 +14,5 @@ data:
   GUARDRAILS_ENABLED: "true"
   USE_TF_INTENT: "false"
   USE_TF_FAITHFULNESS: "false"
-  # WEAVIATE_URL: "http://weaviate.agentic.svc.cluster.local:8080"
-  # WEAVIATE_INDEX: "RAGChunks"
+  WEAVIATE_URL: "http://weaviate.agentic.svc.cluster.local:8080"
+  WEAVIATE_INDEX: "RAGChunks"

@@ -5,16 +5,38 @@ This document tracks issues encountered during development and deployment of the
 ## Table of Contents
 
 - [1. Hallucination & LLM Quality](#1-hallucination-llm-quality)
+  - [Issue #001: Agents returning incorrect invoice details](#issue-001)
+  - [Issue #002: Support agent escalating when not needed](#issue-002)
+  - [Issue #003: Agent "making up" product names](#issue-003)
 - [2. Performance — Cluster, Pods, Kubernetes](#2-performance-kubernetes)
+  - [Issue #004: Supervisor pods OOMKilled under load](#issue-004)
+  - [Issue #005: Agent pool pods CPU throttling](#issue-005)
+  - [Issue #006: Kubernetes cluster node pool exhaustion](#issue-006)
+  - [Issue #007: Slow pod startup (cold start)](#issue-007)
 - [3. RAG Accuracy & Retrieval](#3-rag-accuracy-retrieval)
+  - [Issue #008: RAG returning irrelevant chunks](#issue-008)
+  - [Issue #009: RAG latency > 500ms](#issue-009)
+  - [Issue #010: Conversation history RAG returning stale data](#issue-010)
 - [4. LLM Latency & Time Delay](#4-llm-latency)
+  - [Issue #011: LLM response time > 5s](#issue-011)
+  - [Issue #012: Tool-calling loop adding 3–4s](#issue-012)
 - [5. MCP & Tools](#5-mcp-tools)
+  - [Issue #013: MCP connection failures at startup](#issue-013)
+  - [Issue #014: MCP tools returning empty or errors](#issue-014)
 - [6. Observability & Monitoring](#6-observability-monitoring)
+  - [Issue #015: No visibility into hallucination rate](#issue-015)
+  - [Issue #016: Missing correlation between infra and app metrics](#issue-016)
 - [7. Session, State & Persistence](#7-session-state-persistence)
+  - [Issue #017: Conversation state lost after pod restart](#issue-017)
+  - [Issue #018: Duplicate messages in conversation history](#issue-018)
 - [8. Scaling & Throughput](#8-scaling-throughput)
+  - [Issue #019: Queue depth growing during peak](#issue-019)
 - [9. Cost & Efficiency](#9-cost-efficiency)
+  - [Issue #020: LLM token cost 2x budget](#issue-020)
 - [10. Security & Auth](#10-security-auth)
+  - [Issue #021: Session ID predictable](#issue-021)
 - [11. API & Features](#11-api-features)
+  - [Issue #022: Add GraphQL query API for conversation history (Enhancement)](#issue-022)
 - [Summary Table](#summary-table)
 
 ---
@@ -22,6 +44,7 @@ This document tracks issues encountered during development and deployment of the
 <a id="1-hallucination-llm-quality"></a>
 ## 1. Hallucination & LLM Quality
 
+<a id="issue-001"></a>
 ### Issue #001: Agents returning incorrect invoice details
 
 | Field | Details |
@@ -42,6 +65,7 @@ This document tracks issues encountered during development and deployment of the
 
 ---
 
+<a id="issue-002"></a>
 ### Issue #002: Support agent escalating when not needed
 
 | Field | Details |
@@ -62,6 +86,7 @@ This document tracks issues encountered during development and deployment of the
 
 ---
 
+<a id="issue-003"></a>
 ### Issue #003: Agent "making up" product names
 
 | Field | Details |
@@ -85,6 +110,7 @@ This document tracks issues encountered during development and deployment of the
 <a id="2-performance-kubernetes"></a>
 ## 2. Performance — Cluster, Pods, Kubernetes
 
+<a id="issue-004"></a>
 ### Issue #004: Supervisor pods OOMKilled under load
 
 | Field | Details |
@@ -105,6 +131,7 @@ This document tracks issues encountered during development and deployment of the
 
 ---
 
+<a id="issue-005"></a>
 ### Issue #005: Agent pool pods CPU throttling
 
 | Field | Details |
@@ -125,6 +152,7 @@ This document tracks issues encountered during development and deployment of the
 
 ---
 
+<a id="issue-006"></a>
 ### Issue #006: Kubernetes cluster node pool exhaustion
 
 | Field | Details |
@@ -145,6 +173,7 @@ This document tracks issues encountered during development and deployment of the
 
 ---
 
+<a id="issue-007"></a>
 ### Issue #007: Slow pod startup (cold start)
 
 | Field | Details |
@@ -168,6 +197,7 @@ This document tracks issues encountered during development and deployment of the
 <a id="3-rag-accuracy-retrieval"></a>
 ## 3. RAG Accuracy & Retrieval
 
+<a id="issue-008"></a>
 ### Issue #008: RAG returning irrelevant chunks
 
 | Field | Details |
@@ -188,6 +218,7 @@ This document tracks issues encountered during development and deployment of the
 
 ---
 
+<a id="issue-009"></a>
 ### Issue #009: RAG latency > 500ms
 
 | Field | Details |
@@ -208,6 +239,7 @@ This document tracks issues encountered during development and deployment of the
 
 ---
 
+<a id="issue-010"></a>
 ### Issue #010: Conversation history RAG returning stale data
 
 | Field | Details |
@@ -231,6 +263,7 @@ This document tracks issues encountered during development and deployment of the
 <a id="4-llm-latency"></a>
 ## 4. LLM Latency & Time Delay
 
+<a id="issue-011"></a>
 ### Issue #011: LLM response time > 5s
 
 | Field | Details |
@@ -251,6 +284,7 @@ This document tracks issues encountered during development and deployment of the
 
 ---
 
+<a id="issue-012"></a>
 ### Issue #012: Tool-calling loop adding 3–4s
 
 | Field | Details |
@@ -274,6 +308,7 @@ This document tracks issues encountered during development and deployment of the
 <a id="5-mcp-tools"></a>
 ## 5. MCP & Tools
 
+<a id="issue-013"></a>
 ### Issue #013: MCP connection failures at startup
 
 | Field | Details |
@@ -294,6 +329,7 @@ This document tracks issues encountered during development and deployment of the
 
 ---
 
+<a id="issue-014"></a>
 ### Issue #014: MCP tools returning empty or errors
 
 | Field | Details |
@@ -317,6 +353,7 @@ This document tracks issues encountered during development and deployment of the
 <a id="6-observability-monitoring"></a>
 ## 6. Observability & Monitoring
 
+<a id="issue-015"></a>
 ### Issue #015: No visibility into hallucination rate
 
 | Field | Details |
@@ -337,6 +374,7 @@ This document tracks issues encountered during development and deployment of the
 
 ---
 
+<a id="issue-016"></a>
 ### Issue #016: Missing correlation between infra and app metrics
 
 | Field | Details |
@@ -359,6 +397,7 @@ This document tracks issues encountered during development and deployment of the
 <a id="7-session-state-persistence"></a>
 ## 7. Session, State & Persistence
 
+<a id="issue-017"></a>
 ### Issue #017: Conversation state lost after pod restart
 
 | Field | Details |
@@ -379,6 +418,7 @@ This document tracks issues encountered during development and deployment of the
 
 ---
 
+<a id="issue-018"></a>
 ### Issue #018: Duplicate messages in conversation history
 
 | Field | Details |
@@ -401,6 +441,7 @@ This document tracks issues encountered during development and deployment of the
 <a id="8-scaling-throughput"></a>
 ## 8. Scaling & Throughput
 
+<a id="issue-019"></a>
 ### Issue #019: Queue depth growing during peak
 
 | Field | Details |
@@ -423,6 +464,7 @@ This document tracks issues encountered during development and deployment of the
 
 ## 9. Cost & Efficiency
 
+<a id="issue-020"></a>
 ### Issue #020: LLM token cost 2x budget
 
 | Field | Details |
@@ -446,6 +488,7 @@ This document tracks issues encountered during development and deployment of the
 <a id="10-security-auth"></a>
 ## 10. Security & Auth
 
+<a id="issue-021"></a>
 ### Issue #021: Session ID predictable
 
 | Field | Details |
@@ -469,6 +512,7 @@ This document tracks issues encountered during development and deployment of the
 <a id="11-api-features"></a>
 ## 11. API & Features
 
+<a id="issue-022"></a>
 ### Issue #022: Add GraphQL query API for conversation history (Enhancement)
 
 | Field | Details |

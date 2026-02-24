@@ -1,11 +1,53 @@
 # Agentic Production Framework — Architecture Design
 
+## Table of Contents
+
+- [1. Overview](#1-overview)
+  - [1.1 How Users Interact with Agents (Chatbots)](#1-1-how-users-interact)
+  - [1.2 Agent Architecture: Hierarchical Supervisor / Orchestrator](#1-2-agent-architecture)
+- [2. High-Level Flow Diagram](#2-high-level-flow-diagram)
+- [3. Request Flow (Sequence)](#3-request-flow-sequence)
+- [4. Deployment Diagram](#4-deployment-diagram)
+  - [4.1 One Cluster = Many Pools; Many Clusters](#4-1-one-cluster-many-pools)
+  - [4.2 Deployment Summary](#4-2-deployment-summary)
+  - [4.3 Why Multiple VMs / Pods per Agent Pool?](#4-3-why-multiple-vms-pods)
+- [5. Layered Architecture (Detailed)](#5-layered-architecture)
+  - [5.1 Layer 1 — Frontend Ingress](#5-1-layer-1-frontend-ingress)
+  - [5.2 Layer 2 — Orchestrator (Supervisor)](#5-2-layer-2-orchestrator)
+  - [5.3 Layer 3 — Agent Pools](#5-3-layer-3-agent-pools)
+  - [5.4 Layer 4 — Shared Services](#5-4-layer-4-shared-services)
+  - [5.4.1 AgentOps (Circuit Breaker, Failover, Health)](#5-4-1-agentops)
+  - [5.5 Conversation History Query API (GraphQL)](#5-5-conversation-history-graphql)
+  - [5.6 RAG Ingestion (PDF → Weaviate)](#5-6-rag-ingestion)
+- [6. State and Data Flow Summary](#6-state-and-data-flow)
+- [7. Implemented Code Artifacts](#7-implemented-code-artifacts)
+- [8. Scaling and Efficiency (Recap)](#8-scaling-and-efficiency)
+- [9. Runtime Correctness, Hallucination Detection & Observability](#9-runtime-correctness-observability)
+  - [9.1 How We Measure "Correct" and "Not Hallucinating" at Runtime](#9-1-how-we-measure)
+  - [9.2 Hallucination Handling Flow](#9-2-hallucination-handling-flow)
+  - [9.3 Where Langfuse or LangSmith Fit](#9-3-langfuse-langsmith)
+  - [9.4 Observability Flow in the Architecture](#9-4-observability-flow)
+  - [9.5 Concrete Integration Points](#9-5-concrete-integration-points)
+  - [9.6 Sample Matrix (Langfuse)](#9-6-sample-matrix)
+  - [9.7 Summary](#9-7-summary)
+- [10. Infrastructure & Performance Observability](#10-infrastructure-performance)
+  - [10.1 How to Observe VM / Pod Performance](#10-1-observe-vm-pod)
+  - [10.2 Key Performance Parameters to Observe](#10-2-key-performance-parameters)
+  - [10.3 Where These Metrics Come From (Kubernetes)](#10-3-where-metrics-come-from)
+  - [10.4 Dashboards: Grafana, AWS CloudWatch, and Azure Monitor](#10-4-dashboards)
+  - [10.5 How This Fits With Langfuse / LangSmith](#10-5-fits-with-langfuse)
+- [11. Diagram Summary](#11-diagram-summary)
+
+---
+
+<a id="1-overview"></a>
 ## 1. Overview
 
 This document describes the **layered architecture** and **data flow** for a production-scale, LangGraph- and LLM-based agentic framework. The system is designed to support **thousands of customers** interacting with **hundreds of specialized agents** (e.g., customer support at scale), with centralized orchestration, dynamic routing, and horizontal scaling.
 
 The framework uses **LangGraph** for orchestration and agent workflows, **LLMs** for reasoning and generation, and standard cloud components for ingress, state, and persistence. OVON is omitted in favor of LangGraph’s native state and message passing.
 
+<a id="1-1-how-users-interact"></a>
 ### 1.1 How Users Interact with Agents (Chatbots)
 
 **Yes — the primary interaction model is chat.** Users talk to the system through **chatbots**: multi-turn, conversational interfaces. From the user's point of view it's a single chat (e.g. a support chat); behind the scenes, the supervisor routes each message to the right agent(s).
@@ -69,6 +111,7 @@ Each message from the chatbox goes to the **gateway** → **router** (picks inte
 
 So: **users interact via chat UIs (chatbots)**; each message goes gateway → router → supervisor → chosen agent → reply back to the same chat. Multi-turn, one continuous conversation, with the backend handling routing and handoffs.
 
+<a id="1-2-agent-architecture"></a>
 ### 1.2 Agent Architecture: Hierarchical Supervisor / Orchestrator
 
 This framework uses a **hierarchical supervisor / orchestrator** architecture. One central **supervisor** (orchestrator) sits at the top and controls all routing and handoffs; **specialized agents** (Support, Billing, Tech, Escalation) sit below and perform domain-specific work. The supervisor decides which agent handles each turn; agents do not talk to each other directly — all coordination flows through the supervisor.
@@ -123,6 +166,7 @@ So: **supervisor / orchestrator = hierarchical** — supervisor on top, agents b
 
 ---
 
+<a id="2-high-level-flow-diagram"></a>
 ## 2. High-Level Flow Diagram
 
 ```mermaid
@@ -183,6 +227,7 @@ flowchart TB
 
 ---
 
+<a id="3-request-flow-sequence"></a>
 ## 3. Request Flow (Sequence)
 
 ```mermaid
@@ -226,6 +271,7 @@ sequenceDiagram
 
 ---
 
+<a id="4-deployment-diagram"></a>
 ## 4. Deployment Diagram
 
 Agents and supervisors are deployed across **multiple VMs, containers, and regions**. The diagram below shows how the main components are placed on infrastructure: load balancer, regional gateways, **supervisor replicas** (e.g. Kubernetes pods), **agent pools** (each pool with multiple instances on VMs or pods), and shared services (Redis, Weaviate, DynamoDB).
@@ -306,6 +352,7 @@ flowchart TB
     AgentPools --> DDB
 ```
 
+<a id="4-1-one-cluster-many-pools"></a>
 ### 4.1 One Cluster = Many Pools; Many Clusters
 
 | Question | Answer |
@@ -315,6 +362,7 @@ flowchart TB
 
 So: **one cluster = many pools (supervisor + all agent types); many clusters = one per region (or more for capacity).**
 
+<a id="4-2-deployment-summary"></a>
 ### 4.2 Deployment Summary
 
 | Component | Deployment model | Scale / placement |
@@ -328,6 +376,7 @@ So: **one cluster = many pools (supervisor + all agent types); many clusters = o
 | **Weaviate** | Vector DB for RAG + intent | Per region or global; RAG + intent index; &lt;100ms retrieval. |
 | **DynamoDB** | Managed table(s) | Global or multi-region; conversation history, agent registry. |
 
+<a id="4-3-why-multiple-vms-pods"></a>
 ### 4.3 Why Multiple VMs / Pods per Agent Pool?
 
 - **Throughput:** Many concurrent users; one VM/pod per pool would be a bottleneck. Multiple instances spread load (e.g. 10k users → 100+ agent instances across pools).
@@ -339,8 +388,10 @@ This deployment view complements the logical flow (Section 2) and request sequen
 
 ---
 
+<a id="5-layered-architecture"></a>
 ## 5. Layered Architecture (Detailed)
 
+<a id="5-1-layer-1-frontend-ingress"></a>
 ### 5.1 Layer 1 — Frontend Ingress
 
 **Purpose:** Single entry point for all user traffic; route to the right conversation and supervisor instance.
@@ -361,6 +412,7 @@ This deployment view complements the logical flow (Section 2) and request sequen
 
 ---
 
+<a id="5-2-layer-2-orchestrator"></a>
 ### 5.2 Layer 2 — Orchestrator (Supervisor)
 
 **Purpose:** One “brain” per conversation: maintain global state, decide which agent(s) handle each turn, sequence multi-agent handoffs, and manage escalations.
@@ -403,6 +455,7 @@ When the graph follows the **escalate** edge (low faithfulness or agent-requeste
 
 ---
 
+<a id="5-3-layer-3-agent-pools"></a>
 ### 5.3 Layer 3 — Agent Pools
 
 **Purpose:** Domain-specific work (support, billing, tech, escalation); stateless, sharded by domain/geo; invoked by the supervisor.
@@ -470,6 +523,7 @@ flowchart LR
 
 ---
 
+<a id="5-4-layer-4-shared-services"></a>
 ### 5.4 Layer 4 — Shared Services
 
 **Purpose:** Grounding, session state, and long-term persistence used by both the supervisor and agent pools.
@@ -505,6 +559,7 @@ flowchart LR
 - **Conversation store interface:** `append_turn(session_id, role, content, metadata)`, `get_history(session_id)`, `list_sessions(limit)`.
 - **AgentOps:** Circuit breaker, failover, and health (see §5.4.1).
 
+<a id="5-4-1-agentops"></a>
 ### 5.4.1 AgentOps (Circuit Breaker, Failover, Health)
 
 **Purpose:** Keep the system available when one or more agent pools fail. AgentOps provides **circuit breakers** (stop calling failing agents for a cooldown period), **failover** (try a fallback agent on failure), and a **health endpoint** that reports agent and MCP status so load balancers and runbooks can react.
@@ -594,6 +649,7 @@ flowchart TB
 
 **Files:** `src/agent_ops/` (circuit_breaker, health), `src/config.py` (AgentOps env), `src/supervisor.py` (route filter + invoke failover), `src/api.py` (circuit breaker wiring, `/health` payload).
 
+<a id="5-5-conversation-history-graphql"></a>
 ### 5.5 Conversation History Query API (GraphQL)
 
 **Purpose:** Expose conversation history for dashboards, admin UIs, and analytics via a read-only GraphQL API so clients can request exactly the fields they need (e.g. session list, or full turns for a session).
@@ -660,6 +716,7 @@ flowchart TB
 | **Types** | `Turn` (role, content, metadata_json), `Conversation` (session_id, turns), `SessionInfo` (session_id). |
 | **Context** | GraphQL context provides `conversation_store` so resolvers call `get_history` and `list_sessions` on the shared store. |
 
+<a id="5-6-rag-ingestion"></a>
 ### 5.6 RAG Ingestion (PDF → Weaviate)
 
 **Purpose:** Populate the Weaviate RAG collection from PDF files so agents can retrieve grounded context. Implemented in `src/ingestion/` (CLI: `python -m src.ingestion --input-dir docs`).
@@ -729,6 +786,7 @@ flowchart TB
 
 ---
 
+<a id="6-state-and-data-flow"></a>
 ## 6. State and Data Flow Summary
 
 | Where | What is stored | Backing |
@@ -747,6 +805,7 @@ Data flow in one turn:
 
 ---
 
+<a id="7-implemented-code-artifacts"></a>
 ## 7. Implemented Code Artifacts
 
 The following components are **implemented** and form the core of the system:
@@ -775,6 +834,7 @@ Optional extensions (some as stubs or for future work):
 
 ---
 
+<a id="8-scaling-and-efficiency"></a>
 ## 8. Scaling and Efficiency (Recap)
 
 - **Routing:** Semantic cache + **Weaviate** → fast agent selection, fewer LLM calls.
@@ -785,10 +845,12 @@ Optional extensions (some as stubs or for future work):
 
 ---
 
+<a id="9-runtime-correctness-observability"></a>
 ## 9. Runtime Correctness, Hallucination Detection & Observability (Langfuse / LangSmith)
 
 At runtime we need to **measure whether agents are giving correct, grounded responses** and **detect or reduce hallucination**. This is done with a mix of **grounding checks**, **scores**, **evaluations**, and **observability platforms** (Langfuse or LangSmith) that trace every LLM call and attach quality signals.
 
+<a id="9-1-how-we-measure"></a>
 ### 9.1 How We Measure “Correct” and “Not Hallucinating” at Runtime
 
 | Mechanism | What it does | When / where |
@@ -802,6 +864,7 @@ At runtime we need to **measure whether agents are giving correct, grounded resp
 
 So at runtime, “correct and not hallucinating” is **measured** by: (1) grounding in RAG context, (2) explicit faithfulness/groundedness scores, (3) confidence/self-check, (4) guardrails, and (5) optional voting or HITL when scores are low.
 
+<a id="9-2-hallucination-handling-flow"></a>
 ### 9.2 Hallucination Handling Flow
 
 The diagram below shows how hallucination is **detected and handled** at runtime: agent response → score (faithfulness, confidence) → threshold check → return to user or escalate.
@@ -836,6 +899,7 @@ flowchart TB
 
 **Where this runs:** In the **supervisor** `aggregate` node: the supervisor receives the agent's response and `last_rag_context` (RAG doc context used by the agent), runs **FaithfulnessScorer** (default: `StubFaithfulnessScorer`; set `USE_TF_FAITHFULNESS=true` for **TFFaithfulnessScorer**), checks score against `HALLUCINATION_THRESHOLD_FAITHFULNESS`; if below threshold sets `needs_escalation=True` so the graph follows the `escalate` edge.
 
+<a id="9-3-langfuse-langsmith"></a>
 ### 9.3 Where Langfuse or LangSmith Fit
 
 Both **Langfuse** and **LangSmith** are LLM observability platforms that sit **alongside** the application: every LLM call (and optionally router, RAG, agent nodes) is **traced** and can be decorated with **scores** and **feedback**. They do not replace the above logic; they **record** it and **surface** it for monitoring and tuning.
@@ -851,6 +915,7 @@ Both **Langfuse** and **LangSmith** are LLM observability platforms that sit **a
 
 **Recommendation:** Use **one** of them consistently across the stack (supervisor + all agent pools) so that a single request is one **trace** with **spans** for: router (optional), supervisor steps, each agent invocation, RAG retrieval, and each LLM call. Attach **scores** (e.g. faithfulness, confidence) to the span that produces the final agent response so you can alert and report on “correct vs hallucinating” at runtime.
 
+<a id="9-4-observability-flow"></a>
 ### 9.4 Observability Flow in the Architecture
 
 ```mermaid
@@ -879,6 +944,7 @@ flowchart LR
 - **Scores:** Attached to the agent response span: e.g. `faithfulness` (from **TFFaithfulnessScorer** or stub in supervisor aggregate), `confidence` (self-check or judge model). These are the **runtime measures** of correctness and hallucination.
 - **Evals:** Offline or scheduled: run datasets through the pipeline, compute faithfulness/relevance; compare over time. Langfuse/LangSmith both support running evals and storing results.
 
+<a id="9-5-concrete-integration-points"></a>
 ### 9.5 Concrete Integration Points
 
 | Layer / component | What to send to Langfuse / LangSmith |
@@ -894,6 +960,7 @@ flowchart LR
 - After an agent produces a response, run your **faithfulness** (and optionally **confidence**) logic; then call the platform’s API to **add a score** to the corresponding span (e.g. `trace.score(name="faithfulness", value=0.92)`).
 - In the dashboard, set **alerts** when `faithfulness` or `confidence` drops below a threshold (e.g. &lt;0.8) so you can escalate or block the response and treat it as “possibly hallucinating.”
 
+<a id="9-6-sample-matrix"></a>
 ### 9.6 Sample Matrix (Langfuse)
 
 Below is a **sample Langfuse matrix**: which **traces/spans** we create, which **scores** we attach, **metadata** we send, and **alert thresholds** for quality and hallucination. Use it as a runbook for instrumenting the framework.
@@ -941,6 +1008,7 @@ langfuse.score(
 
 This matrix aligns with Langfuse’s model of **traces → spans → scores** and gives a single place to see what to log and when to alert for correctness and hallucination.
 
+<a id="9-7-summary"></a>
 ### 9.7 Summary
 
 - **Runtime “correct / not hallucinating”** is measured by: RAG grounding, faithfulness/groundedness scores, confidence/self-check, guardrails, and optional voting or HITL.
@@ -948,10 +1016,12 @@ This matrix aligns with Langfuse’s model of **traces → spans → scores** an
 
 ---
 
+<a id="10-infrastructure-performance"></a>
 ## 10. Infrastructure & Performance Observability (VM, Memory, CPU, etc.)
 
 Besides **LLM/agent quality** (Section 9), you need to observe **infrastructure and performance**: memory usage of VMs/pods, CPU, disk, network, and queue depth. These are typically collected from the **host and Kubernetes** and viewed in a metrics/ops dashboard — e.g. **Prometheus + Grafana** (cloud-agnostic), **AWS CloudWatch** (EKS Container Insights), or **Azure Monitor** (AKS Container Insights).
 
+<a id="10-1-observe-vm-pod"></a>
 ### 10.1 How to Observe VM / Pod Performance
 
 | Approach | What it gives you | Typical use |
@@ -963,6 +1033,7 @@ Besides **LLM/agent quality** (Section 9), you need to observe **infrastructure 
 
 **Recommended:** Use **Prometheus** (or cloud equivalent) to scrape **Kubernetes metrics** and **application metrics**; visualize in **Grafana**, **AWS CloudWatch**, or **Azure Monitor** — depending on where you run your workloads. All three can give you VM/pod memory, CPU, and app-level performance.
 
+<a id="10-2-key-performance-parameters"></a>
 ### 10.2 Key Performance Parameters to Observe
 
 | Parameter | Source | Metric name (example) | What to alert on |
@@ -977,6 +1048,7 @@ Besides **LLM/agent quality** (Section 9), you need to observe **infrastructure 
 | **Pod count / queue depth** | kube-state-metrics or app | `kube_deployment_status_replicas`, custom `queue_depth` | Replicas at max and CPU still high → increase max replicas; queue depth &gt; N → scale or backpressure. |
 | **Restarts / OOMKills** | kube-state-metrics | `kube_pod_container_status_restarts_total`, container exit reason | Restarts or OOMKilled &gt; 0 → investigate memory/limits. |
 
+<a id="10-3-where-metrics-come-from"></a>
 ### 10.3 Where These Metrics Come From (Kubernetes)
 
 ```mermaid
@@ -1002,6 +1074,7 @@ flowchart LR
 - **kube-state-metrics:** Exposes **pod/deployment/state** (replicas, restarts, resource requests/limits). Deploy once per cluster; Prometheus scrapes it.
 - **Your application:** Supervisor and agent pool services expose **custom metrics** (e.g. request count, latency histogram, queue depth) on `/metrics` in Prometheus format.
 
+<a id="10-4-dashboards"></a>
 ### 10.4 Dashboards: Grafana, AWS CloudWatch, and Azure Monitor
 
 You can use any of the three for VM/pod memory, CPU, and alerts. Choose based on your cloud and preference:
@@ -1020,6 +1093,7 @@ You can use any of the three for VM/pod memory, CPU, and alerts. Choose based on
 
 So: **Grafana** when you want a single UI across clouds or already run Prometheus; **CloudWatch** when you run on AWS and prefer native tooling; **Azure Monitor** when you run on Azure and prefer native tooling.
 
+<a id="10-5-fits-with-langfuse"></a>
 ### 10.5 How This Fits With Langfuse / LangSmith
 
 | Observability type | Tool (example) | What you see |
@@ -1031,6 +1105,7 @@ Use **both**: Langfuse/LangSmith for “is the agent answering correctly?” and
 
 ---
 
+<a id="11-diagram-summary"></a>
 ## 11. Diagram Summary
 
 - **Section 1.1:** How users interact with agents (chatbots: chat UI, WebSocket/REST, session, routing).
