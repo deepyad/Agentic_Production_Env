@@ -37,6 +37,11 @@ This document tracks issues encountered during development and deployment of the
   - [Issue #021: Session ID predictable](#issue-021)
 - [11. API & Features](#11-api-features)
   - [Issue #022: Add GraphQL query API for conversation history (Enhancement)](#issue-022)
+- [12. Optimization & Inference](#12-optimization-inference)
+  - [Issue #023: LLM memory and cost too high (model quantization)](#issue-023)
+  - [Issue #024: Inference throughput insufficient (dynamic batching)](#issue-024)
+  - [Issue #025: High latency for repeated or similar queries (KV cache)](#issue-025)
+  - [Issue #026: Need faster GPU inference (TensorRT-LLM on A100)](#issue-026)
 - [Summary Table](#summary-table)
 
 ---
@@ -533,6 +538,89 @@ This document tracks issues encountered during development and deployment of the
 
 ---
 
+<a id="12-optimization-inference"></a>
+## 12. Optimization & Inference
+
+<a id="issue-023"></a>
+### Issue #023: LLM memory and cost too high (model quantization)
+
+| Field | Details |
+|-------|---------|
+| **Status** | Resolved |
+| **Date** | 2025-12-12 |
+| **Severity** | High |
+
+**Description:** Self-hosted or edge LLM inference consumed too much memory per model instance; GPU nodes were expensive and limited how many replicas we could run.
+
+**Root cause:** Models were loaded in full precision (16-bit FP16/BF16). No quantization; each instance required 2x model size in VRAM.
+
+**Fix / workaround:**
+- **Model quantization:** Migrated from 16-bit to **4-bit** using **AWQ** (Activation-aware Weight Quantization) and **LLM.int8** for sensitive layers where needed.
+- Achieved **~75% memory reduction** per instance; same GPU can now run 4x more concurrent model replicas or larger batch sizes.
+- Validated quality on support/billing evals; minimal accuracy drop for our use case. Documented quantization pipeline and calibration dataset in runbook.
+
+---
+
+<a id="issue-024"></a>
+### Issue #024: Inference throughput insufficient (dynamic batching)
+
+| Field | Details |
+|-------|---------|
+| **Status** | Resolved |
+| **Date** | 2026-01-08 |
+| **Severity** | High |
+
+**Description:** During peak, LLM inference could not keep up with request rate. Per-request latency was acceptable but total throughput (requests/sec) capped; queue depth grew.
+
+**Root cause:** Static batching or single-request inference; GPU utilization was low when requests arrived unevenly.
+
+**Fix / workaround:**
+- Adopted **vLLM** with **continuous batching**: incoming requests are added to the batch as soon as slots free up; finished sequences leave the batch without waiting for the whole batch.
+- Achieved **~4x throughput** vs previous static-batch setup at similar latency.
+- Tuned max batch size and chunk size for our GPU (A100 80GB); added metrics for batch fill rate and GPU utilization.
+
+---
+
+<a id="issue-025"></a>
+### Issue #025: High latency for repeated or similar queries (KV cache)
+
+| Field | Details |
+|-------|---------|
+| **Status** | Resolved |
+| **Date** | 2026-01-22 |
+| **Severity** | Medium |
+
+**Description:** Users with repeated or similar prompts (e.g. same system prompt + RAG prefix, or retries) still paid full prefill cost every time. P99 latency for “warm” patterns was no better than cold.
+
+**Root cause:** No reuse of key-value (KV) cache across requests; each request recomputed attention for the full context.
+
+**Fix / workaround:**
+- Enabled **prefix caching** (KV cache reuse) for common prefixes: system prompt, shared RAG context, and conversation history prefix where identical across requests.
+- Integrated with vLLM/TensorRT-LLM prefix caching APIs; hashed prefix to decide reuse.
+- Achieved **~60% latency reduction** for requests that shared long prefixes (e.g. same RAG doc block). Monitored cache hit rate and eviction in dashboards.
+
+---
+
+<a id="issue-026"></a>
+### Issue #026: Need faster GPU inference (TensorRT-LLM on A100)
+
+| Field | Details |
+|-------|---------|
+| **Status** | Resolved |
+| **Date** | 2026-02-05 |
+| **Severity** | High |
+
+**Description:** Even with quantization and batching, baseline inference engine left GPU underutilized; we needed lower latency and higher tokens/sec for real-time chat.
+
+**Root cause:** Generic inference stack (e.g. Hugging Face + PyTorch) not optimized for NVIDIA A100; kernel fusion and memory layout suboptimal.
+
+**Fix / workaround:**
+- Deployed **TensorRT-LLM** on **A100 GPUs** for production inference: compiled model with TensorRT-LLM for A100, enabling fused kernels, in-flight batching, and efficient memory use.
+- Run inference in dedicated TensorRT-LLM service; API/supervisor call this service instead of loading the model in-app. Kept fallback to vLLM or OpenAI for non-GPU nodes.
+- Documented build and deploy pipeline (model export → TensorRT-LLM build → container); added health checks and versioning for model updates.
+
+---
+
 <a id="summary-table"></a>
 ## Summary Table
 
@@ -560,5 +648,9 @@ This document tracks issues encountered during development and deployment of the
 | 020 | Cost | Token overrun | Medium | Resolved |
 | 021 | Security | Predictable session ID | Medium | Resolved |
 | 022 | API/Features | GraphQL query API for conversation history | Low (enhancement) | Resolved |
+| 023 | Optimization | LLM memory/cost — model quantization (AWQ/LLM.int8, 4-bit) | High | Resolved |
+| 024 | Optimization | Throughput — vLLM + continuous batching | High | Resolved |
+| 025 | Optimization | Latency — KV cache / prefix caching for repeated queries | Medium | Resolved |
+| 026 | Optimization | Inference engine — TensorRT-LLM on A100 GPUs | High | Resolved |
 
 ---

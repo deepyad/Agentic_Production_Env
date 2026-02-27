@@ -14,5 +14,9 @@ data:
   GUARDRAILS_ENABLED: "true"
   USE_TF_INTENT: "false"
   USE_TF_FAITHFULNESS: "false"
+  INFERENCE_BACKEND: "openai"
+  # When INFERENCE_BACKEND=self_hosted: set INFERENCE_URL (e.g. http://vllm.agentic.svc.cluster.local:8000)
+  # INFERENCE_URL: "http://vllm:8000"
+  # INFERENCE_API_KEY: "dummy"
   WEAVIATE_URL: "http://weaviate.agentic.svc.cluster.local:8080"
   WEAVIATE_INDEX: "RAGChunks"

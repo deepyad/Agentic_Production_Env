@@ -4,9 +4,9 @@ import re
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-from langchain_openai import ChatOpenAI
 
 from ..config import config
+from ..inference import get_llm_backend
 from ..shared_services.rag import RAGService, StubRAGService
 from ..shared_services.guardrails import GuardrailService, StubGuardrailService, SimpleGuardrailService
 from ..shared_services.history_rag import ConversationHistoryRAG
@@ -41,11 +41,21 @@ class SupportAgent:
         built_in = get_support_tools()
         self.tools = get_tools_with_mcp(built_in)
         # top_p: nucleus sampling to constrain token selection, reduce hallucinations
-        self.llm = ChatOpenAI(model=model, temperature=0, top_p=config.top_p).bind_tools(self.tools)
+        backend = get_llm_backend()
+        self.llm = backend.create_tool_llm(
+            model=model,
+            tools=self.tools,
+            temperature=0,
+            top_p=config.top_p,
+        )
         self.use_react = getattr(config, "use_react", False)
         self.react_max_steps = getattr(config, "react_max_steps", 10)
         # For ReAct we need an LLM that outputs text (Thought/Action), not tool_calls
-        self.llm_no_tools = ChatOpenAI(model=model, temperature=0, top_p=config.top_p) if self.use_react else None
+        self.llm_no_tools = (
+            backend.create_text_llm(model=model, temperature=0, top_p=config.top_p)
+            if self.use_react
+            else None
+        )
 
     def __call__(self, state: dict[str, Any]) -> dict[str, Any]:
         """Process state: guardrails → RAG context + tool-calling loop → guard_output."""

@@ -3,12 +3,12 @@ import re
 from typing import Annotated, Any, Literal, Optional, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import MemorySaver
 
 from .config import config
+from .inference import get_llm_backend
 
 
 def _make_checkpointer(use_checkpointer: bool):
@@ -82,6 +82,7 @@ def create_supervisor_graph(
     billing_agent = create_billing_agent(rag=rag)
     agents_map = {"support": support_agent, "billing": billing_agent}
     use_planning = getattr(config, "use_planning", False)
+    backend = get_llm_backend()
 
     def plan_node(state: dict[str, Any]) -> dict[str, Any]:
         """When USE_PLANNING: use LLM to pick which agent(s) should handle this turn; otherwise no-op."""
@@ -99,7 +100,11 @@ def create_supervisor_graph(
             f"Suggested agents from router: {suggested}\n"
             f"Available agents: {available}. Which single agent should handle this? Reply with exactly one word: support or billing."
         )
-        llm = ChatOpenAI(model=config.default_model, temperature=0)
+        llm = backend.create_text_llm(
+            model=config.default_model,
+            temperature=0,
+            top_p=config.top_p,
+        )
         try:
             resp = llm.invoke([SystemMessage(content="You are a router. Reply with only one word: support or billing."), HumanMessage(content=prompt)])
             text = (getattr(resp, "content", None) or "").strip().lower()

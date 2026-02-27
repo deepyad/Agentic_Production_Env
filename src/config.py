@@ -39,6 +39,15 @@ class Config:
     use_react: bool = os.getenv("USE_REACT", "false").lower() in ("true", "1", "yes")
     react_max_steps: int = int(os.getenv("REACT_MAX_STEPS", "10"))
 
+    # Inference backend: which implementation handles main LLM calls.
+    # "openai" (default) = OpenAI API; "self_hosted" = OpenAI-compatible server (vLLM, TensorRT-LLM, etc.).
+    inference_backend: str = os.getenv("INFERENCE_BACKEND", "openai").strip().lower()
+    # When inference_backend is self_hosted: base URL of the inference server (e.g. http://vllm:8000).
+    # Chat completions are called at {inference_url}/v1/chat/completions.
+    inference_url: str = os.getenv("INFERENCE_URL", "").strip()
+    # Optional API key for self-hosted server (many accept any value; use "dummy" if not required).
+    inference_api_key: str = os.getenv("INFERENCE_API_KEY", "dummy").strip()
+
     # Human-in-the-loop (HITL): when we escalate, create ticket / notify
     hitl_enabled: bool = os.getenv("HITL_ENABLED", "true").lower() in ("true", "1", "yes")
     hitl_handler: str = os.getenv("HITL_HANDLER", "ticket").strip().lower() or "stub"  # stub | ticket | email

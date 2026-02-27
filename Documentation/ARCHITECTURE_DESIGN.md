@@ -1115,7 +1115,9 @@ Use **both**: Langfuse/LangSmith for “is the agent answering correctly?” and
 - **Section 4:** Deployment diagram — supervisors and agents on multiple VMs/pods and regions; shared services.
 - **Section 5.5:** GraphQL conversation history — request flow (clients → /graphql → resolvers → ConversationStore) and schema shape (queries and types).
 - **Section 5.6:** RAG ingestion — pipeline (PDF dir → list → extract → chunk → Weaviate) and chunking strategy (boundaries, overlap).
+- **Section 7:** Implemented code artifacts — mapping from architecture boxes to concrete files.
 - **Section 9:** Runtime correctness and hallucination measurement; **hallucination handling flow** (diagram: agent → supervisor aggregate → TFFaithfulnessScorer → threshold → return or escalate); observability with Langfuse or LangSmith; where traces and scores are attached.
 - **Section 10:** Infrastructure and performance observability — how to observe VM/pod memory, CPU, and other performance parameters (Prometheus + Grafana, AWS CloudWatch, or Azure Monitor).
+- **Section 12:** Inference optimization — how the **LLM / Inference** box is implemented and tuned: model quantization (16→4-bit via AWQ/LLM.int8 for ~75% memory reduction), dynamic/continuous batching with vLLM for higher throughput, KV prefix caching for repeated prefixes (latency reduction), and TensorRT-LLM on A100 GPUs for faster tokens/sec.
 
 Together, this design and the implemented code artifacts describe a **production-style**, LangGraph- and LLM-based agentic framework that scales to many users and many agents while keeping the implementation clear and modular.
