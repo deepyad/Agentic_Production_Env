@@ -429,6 +429,80 @@ This deployment view complements the logical flow (Section 2) and request sequen
   - **Nodes:** `route` (uses router suggestion or LLM to pick agent), `invoke_agent` (calls the chosen pool; agents return `last_rag_context`), `aggregate` (runs **FaithfulnessScorer** on response + last_rag_context; if score &lt; threshold sets needs_escalation), `escalate` (optional).
   - **Edges:** Conditional from `route` to agent nodes; from each agent back to `aggregate`; optional `aggregate` → `route` for next turn.
 
+**LangGraph orchestrating LangChain — supervisor graph (src/supervisor.py)**
+
+The diagram below shows the **LangGraph** workflow and where **LangChain** components are used. The graph is defined and compiled in `src/supervisor.py`; agents (Support, Billing) in `src/agents/` use LangChain messages, LLM, and tools.
+
+**Nodes (LangGraph):**
+
+| Node name | Role |
+|-----------|------|
+| **plan** | Entry node. When `USE_PLANNING=true`, calls LLM to choose one agent; writes `planned_agent_ids`. Else no-op. |
+| **route** | Picks `current_agent` from `planned_agent_ids` (if planning) or `suggested_agent_ids` (router); respects circuit breaker. |
+| **invoke_agent** | Calls the chosen agent (Support or Billing); agent returns messages + `last_rag_context`. |
+| **aggregate** | Runs FaithfulnessScorer on last response + `last_rag_context`; sets `needs_escalation` if score &lt; threshold. |
+| **escalate** | Calls HITL handler; returns "Connecting you with a human agent." |
+
+**Edges (flow):**
+
+| From | To | Condition |
+|------|-----|-----------|
+| **plan** | **route** | Always. |
+| **route** | **invoke_agent** | Always. |
+| **invoke_agent** | **aggregate** | Always. |
+| **aggregate** | **escalate** | If `needs_escalation` is true. |
+| **aggregate** | **END** | If `needs_escalation` is false. |
+| **escalate** | **END** | Always. |
+
+```mermaid
+flowchart LR
+    subgraph Graph["LangGraph - Supervisor state graph"]
+        direction TB
+        P[plan]
+        R[route]
+        I[invoke_agent]
+        A[aggregate]
+        DEC{needs_escalation?}
+        E[escalate]
+        END_[END]
+        P --> R
+        R --> I
+        I --> A
+        A --> DEC
+        DEC -->|yes| E
+        DEC -->|no| END_
+        E --> END_
+    end
+
+    subgraph LangChain["LangChain elements used by nodes"]
+        direction TB
+        L1["plan: create_text_llm + invoke"]
+        L2["route: state only"]
+        L3["invoke_agent: Support/Billing agent"]
+        L4["aggregate: FaithfulnessScorer"]
+        L5["escalate: HITL handler"]
+    end
+
+    subgraph Agents["Agents - LangChain inside"]
+        direction TB
+        A1["SupportAgent: RAG + LLM bind_tools + tools"]
+        A2["BillingAgent: RAG + LLM bind_tools + tools"]
+    end
+
+    P -.->|uses| L1
+    R -.->|uses| L2
+    I -.->|calls| L3
+    I -.->|calls| Agents
+    A -.->|uses| L4
+    E -.->|uses| L5
+```
+
+- **plan:** When `USE_PLANNING=true`, uses **LangChain** `create_text_llm()` and `invoke([SystemMessage, HumanMessage])` to pick one agent; writes `planned_agent_ids` to state.
+- **route:** Reads state only (planned or suggested agent ids); picks `current_agent`; no LLM.
+- **invoke_agent:** Calls the **Support** or **Billing** agent (LangChain: messages, RAG, LLM with `bind_tools`, tool loop or ReAct).
+- **aggregate:** Runs **FaithfulnessScorer** (TF or stub) on last response + `last_rag_context`; sets `needs_escalation` if score &lt; threshold.
+- **escalate:** Calls **HITL** handler (ticket/email/stub); returns message to user.
+
 **FaithfulnessScorer(response, last_rag_context) — how it works**
 
 - **What is passed:** After an agent runs, the **invoke_agent** node puts the agent’s reply into `messages` and the agent’s **RAG doc context** (the retrieved chunks used to answer) into state as **`last_rag_context`**. The **aggregate** node then takes (1) **response** = text of the last AI message in state, and (2) **context** = `state["last_rag_context"]`.
@@ -535,6 +609,38 @@ flowchart LR
 | **Session Cache** | Redis: short-term conversation history and supervisor state; TTL e.g. 24h; high throughput. |
 | **Conversation Store** | DynamoDB (or equivalent): long-term conversation history for analytics and replay. |
 | **Analytics / Monitoring** | Metrics (latency, queue depth, errors) and optional “analytics agents” for SLA or hallucination monitoring. |
+
+**Layer 4 — Shared Services diagram**
+
+```mermaid
+flowchart TB
+    subgraph Consumers["Consumers of shared services"]
+        SUP[Supervisor]
+        SP[Support Agent]
+        BP[Billing Agent]
+    end
+
+    subgraph Shared["Layer 4 - Shared Services"]
+        RAG[RAG Vector Store - Weaviate doc retrieval]
+        GUARD[Guardrails - guard_input and guard_output]
+        SESS[Session Cache - Redis checkpointer state]
+        CONV[Conversation Store - append_turn and get_history]
+        OPS[AgentOps - circuit breaker and failover and health]
+    end
+
+    SUP -->|read and write state| SESS
+    SUP -->|circuit state and failover| OPS
+    SP -->|retrieve chunks| RAG
+    SP -->|guard_input and guard_output| GUARD
+    BP -->|retrieve chunks| RAG
+    BP -->|guard_input and guard_output| GUARD
+    SUP -.->|persist turns| CONV
+    SP -.->|persist turns| CONV
+    BP -.->|persist turns| CONV
+```
+
+- **Supervisor** uses **Session Cache** (Redis) for checkpointer state and **AgentOps** for circuit breaker and failover; the API persists turns to **Conversation Store** after the supervisor returns.
+- **Agents** use **RAG** for document retrieval and **Guardrails** for input/output filtering; conversation persistence is done at the API layer using **Conversation Store**.
 
 **Implemented:**
 
