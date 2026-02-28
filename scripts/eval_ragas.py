@@ -11,7 +11,7 @@ Usage:
   python scripts/eval_ragas.py --data path/to/samples.json
   python scripts/eval_ragas.py --output results.json
 
-See Documentation/RAGAS_AND_FAITHFULNESS.md for where RAGAS sits in the project.
+See Documentation/Observability_Details.md for where RAGAS sits in the project.
 """
 from __future__ import annotations
 

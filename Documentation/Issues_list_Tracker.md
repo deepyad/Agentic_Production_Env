@@ -414,7 +414,7 @@ This document tracks issues encountered during development and deployment of the
 **Fix / workaround:**
 - Implemented **RAGAS** evaluation script: **`scripts/eval_ragas.py`**. Runs offline or in CI; consumes (user_input, retrieved_contexts, response, optional reference) samples; computes faithfulness and answer relevancy via RAGAS (LLM-based metrics).
 - Added `ragas` to `requirements.txt`. Sample data: built-in in script or `scripts/sample_ragas_data.json`; custom data via `--data path/to/samples.json`; results via `--output results.json`.
-- Documented in **Documentation/RAGAS_AND_FAITHFULNESS.md** (where RAGAS sits, how to run, relation to runtime faithfulness and observability). Architecture: **ARCHITECTURE_DESIGN.md** §7 (Implemented Code Artifacts) and §9 (Evals).
+- Documented in **Documentation/Observability_Details.md** (where RAGAS sits, how to run, relation to runtime faithfulness and observability). Architecture: **ARCHITECTURE_DESIGN.md** §7 (Implemented Code Artifacts) and §9 (Evals).
 
 ---
 

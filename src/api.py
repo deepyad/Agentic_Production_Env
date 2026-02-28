@@ -109,9 +109,9 @@ def chat(req: ChatRequest) -> ChatResponse:
         session_id=req.session_id,
     )
 
-    # 2. Build initial state for supervisor
+    # 2. Build initial state and run config for supervisor
     thread_id = route_result.session_id
-    config = {"configurable": {"thread_id": thread_id}}
+    run_config: dict = {"configurable": {"thread_id": thread_id}}
     initial_state = {
         "messages": [HumanMessage(content=req.message)],
         "session_id": thread_id,
@@ -119,13 +119,53 @@ def chat(req: ChatRequest) -> ChatResponse:
         "suggested_agent_ids": route_result.suggested_agent_pool_ids,
     }
 
+    # Langfuse: one trace per request; session_id and user_id for correlation
+    langfuse_handler = None
+    if getattr(config, "langfuse_enabled", False):
+        try:
+            from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
+            langfuse_handler = LangfuseCallbackHandler()
+            run_config["callbacks"] = [langfuse_handler]
+            run_config["metadata"] = {
+                "langfuse_session_id": thread_id,
+                "langfuse_user_id": req.user_id,
+            }
+        except Exception:
+            langfuse_handler = None
+
     # 3. Invoke supervisor graph
     try:
-        result = supervisor.invoke(initial_state, config)
+        result = supervisor.invoke(initial_state, run_config)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
-    # 4. Extract last AIMessage as reply
+    # 4. Langfuse: attach faithfulness score to trace and flush
+    if langfuse_handler is not None:
+        try:
+            from langfuse import get_client as get_langfuse_client
+            langfuse_client = get_langfuse_client()
+            faith = result.get("faithfulness_score")
+            trace_id = getattr(langfuse_handler, "last_trace_id", None) or getattr(langfuse_handler, "get_trace_id", lambda: None)()
+            if faith is not None and trace_id:
+                if hasattr(langfuse_client, "create_score"):
+                    langfuse_client.create_score(
+                        trace_id=trace_id,
+                        name="faithfulness",
+                        value=float(faith),
+                        comment="TFFaithfulnessScorer or stub vs RAG context",
+                    )
+                elif hasattr(langfuse_client, "score"):
+                    langfuse_client.score(
+                        trace_id=trace_id,
+                        name="faithfulness",
+                        value=float(faith),
+                        comment="TFFaithfulnessScorer or stub vs RAG context",
+                    )
+            langfuse_client.flush()
+        except Exception:
+            pass
+
+    # 5. Extract last AIMessage as reply
     messages = result.get("messages", [])
     reply = ""
     for m in reversed(messages):

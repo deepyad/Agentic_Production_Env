@@ -56,7 +56,12 @@ class Config:
     # LangGraph checkpointer: Redis for production (reduces pod memory, survives restarts). Empty = in-memory.
     redis_url: str = os.getenv("REDIS_URL", "").strip()
     # Session checkpoint TTL in minutes (e.g. 1440 = 24h). Only used when redis_url is set. 0 = no expiry.
-    checkpoint_ttl_minutes: int = int(os.getenv("CHECKPOINT_TTL_MINUTES", "1440"))
+
+    # Langfuse: classic observability (traces, spans, faithfulness score). Enable when keys are set.
+    langfuse_enabled: bool = bool(os.getenv("LANGFUSE_SECRET_KEY", "").strip())
+    langfuse_secret_key: str = os.getenv("LANGFUSE_SECRET_KEY", "").strip()
+    langfuse_public_key: str = os.getenv("LANGFUSE_PUBLIC_KEY", "").strip()
+    langfuse_base_url: str = os.getenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com").strip()
 
 
 config = Config()

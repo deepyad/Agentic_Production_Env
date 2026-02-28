@@ -28,8 +28,11 @@ weaviate-client>=4.0.0
 langgraph-checkpoint-redis>=0.3.0
 redis>=5.2.0
 
-# RAG evaluation (offline / CI) — see scripts/eval_ragas.py and Documentation/RAGAS_AND_FAITHFULNESS.md
+# RAG evaluation (offline / CI) — see scripts/eval_ragas.py and Documentation/Observability_Details.md
 ragas>=0.2.0
+
+# Classic observability: traces, spans, scores (see Documentation/Observability_Details.md §7)
+langfuse>=3.0.0
 
 # Optional: TensorFlow for intent classifier (router). Use keyword router if not installed.
 # tensorflow>=2.15.0

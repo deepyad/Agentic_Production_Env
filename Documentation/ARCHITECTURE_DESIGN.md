@@ -822,7 +822,8 @@ The following components are **implemented** and form the core of the system:
 | 5c | **HITL (human-in-the-loop)** | **`src/hitl/`** module: `HitlHandler` ABC, `EscalationContext`; handlers: stub, ticket (create_support_ticket + pending list), email_notify. Supervisor **escalate_node** calls handler `on_escalate(ctx)`. Config: `HITL_ENABLED`, `HITL_HANDLER`, `HITL_EMAIL_TO`. **GET /hitl/pending**, **POST /hitl/pending/{session_id}/clear** for human queue. |
 | 6 | **Shared Service Interfaces** | RAG, session cache, conversation store: abstract interfaces with in-memory or minimal implementations. |
 | 7 | **Entrypoint / API** | FastAPI app: receives message → calls router → runs supervisor graph → returns response. **GraphQL** at `/graphql` for conversation history: queries `conversation(session_id, limit)` and `sessions(limit)`; see §5.5. **Health** at `GET /health` with AgentOps status (§5.4.1). **HITL** at `GET /hitl/pending` and `POST /hitl/pending/{session_id}/clear`. |
-| 8 | **RAG evaluation (RAGAS)** | Offline/CI only: **`scripts/eval_ragas.py`** runs RAGAS on (question, retrieved_contexts, response) samples; metrics: faithfulness, answer relevancy. Use built-in sample or `--data samples.json`; `--output results.json`. Requires `OPENAI_API_KEY`. See **Documentation/RAGAS_AND_FAITHFULNESS.md** and §9 (Evals). |
+| 8 | **RAG evaluation (RAGAS)** | Offline/CI only: **`scripts/eval_ragas.py`** runs RAGAS on (question, retrieved_contexts, response) samples; metrics: faithfulness, answer relevancy. Use built-in sample or `--data samples.json`; `--output results.json`. Requires `OPENAI_API_KEY`. See **Documentation/Observability_Details.md** and §9 (Evals). |
+| 9 | **Classic observability (Langfuse)** | When `LANGFUSE_SECRET_KEY` is set, the chat endpoint traces each request via Langfuse `CallbackHandler` (one trace per request; spans for supervisor nodes, agents, LLM). Faithfulness score from `aggregate_node` is attached to the trace. Session and user sent as metadata. See **Observability_Details.md** §7 and §9.5. |
 
 Optional extensions (some as stubs or for future work):
 
@@ -945,7 +946,7 @@ flowchart LR
 
 - **Traces:** One trace per user request; spans for router, supervisor nodes, agent subgraph, RAG, each LLM call.
 - **Scores:** Attached to the agent response span: e.g. `faithfulness` (from **TFFaithfulnessScorer** or stub in supervisor aggregate), `confidence` (self-check or judge model). These are the **runtime measures** of correctness and hallucination.
-- **Evals:** Offline or scheduled: run datasets through the pipeline, compute faithfulness/relevance; compare over time. Langfuse/LangSmith both support running evals and storing results. **RAGAS** (box in diagram) is implemented for **offline** RAG evaluation only: `scripts/eval_ragas.py` consumes (question, contexts, answer) samples and produces faithfulness, answer relevancy; not on the request path. See **Documentation/RAGAS_AND_FAITHFULNESS.md**.
+- **Evals:** Offline or scheduled: run datasets through the pipeline, compute faithfulness/relevance; compare over time. Langfuse/LangSmith both support running evals and storing results. **RAGAS** (box in diagram) is implemented for **offline** RAG evaluation only: `scripts/eval_ragas.py` consumes (question, contexts, answer) samples and produces faithfulness, answer relevancy; not on the request path. See **Documentation/Observability_Details.md**.
 
 <a id="9-5-concrete-integration-points"></a>
 ### 9.5 Concrete Integration Points
@@ -957,11 +958,7 @@ flowchart LR
 | **Agent Pool** | Spans for: RAG retrieval (input query, top_k, latency), LLM call (prompt, completion, tokens, model). **Attach scores:** `faithfulness`, `confidence` (and optionally `relevance`) to the span that produces the reply. |
 | **Shared services** | RAG: span per `retrieve`. DB/Redis: optional spans for persistence (useful for latency breakdown). |
 
-**Implementation (conceptual):**
-
-- Wrap LangGraph execution with the platform’s callback/handler (e.g. LangChain’s `LangSmithCallbackHandler` or Langfuse’s LangChain/LangGraph integration).
-- After an agent produces a response, run your **faithfulness** (and optionally **confidence**) logic; then call the platform’s API to **add a score** to the corresponding span (e.g. `trace.score(name="faithfulness", value=0.92)`).
-- In the dashboard, set **alerts** when `faithfulness` or `confidence` drops below a threshold (e.g. &lt;0.8) so you can escalate or block the response and treat it as “possibly hallucinating.”
+**Implementation:** **Langfuse is implemented** in this repo. Set `LANGFUSE_SECRET_KEY` (and `LANGFUSE_PUBLIC_KEY`, optional `LANGFUSE_BASE_URL`) to enable. The chat endpoint passes a Langfuse `CallbackHandler` to the supervisor so each request creates one trace with spans for LangGraph nodes and LLM calls. The supervisor stores `faithfulness_score` in state; after `invoke()`, the API attaches it to the trace via `create_score`/`score`. Session and user are sent as trace metadata. See `src/api.py` and **Observability_Details.md** §7.
 
 <a id="9-6-sample-matrix"></a>
 ### 9.6 Sample Matrix (Langfuse)

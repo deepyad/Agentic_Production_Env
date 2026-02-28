@@ -53,6 +53,7 @@ class SupervisorState(TypedDict, total=False):
     escalation_reason: str
     resolved: bool
     last_rag_context: str
+    faithfulness_score: float | None  # Set in aggregate_node for observability (e.g. Langfuse)
 
 
 def create_supervisor_graph(
@@ -179,6 +180,7 @@ def create_supervisor_graph(
         context = state.get("last_rag_context", "") or ""
         if response_text and scorer:
             faith = scorer.score(response_text, context)
+            out["faithfulness_score"] = faith
             if faith < config.hallucination_threshold_faithfulness:
                 out["needs_escalation"] = True
                 out["escalation_reason"] = "low_faithfulness"
