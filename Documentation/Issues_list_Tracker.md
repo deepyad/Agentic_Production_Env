@@ -26,6 +26,7 @@ This document tracks issues encountered during development and deployment of the
 - [6. Observability & Monitoring](#6-observability-monitoring)
   - [Issue #015: No visibility into hallucination rate](#issue-015)
   - [Issue #016: Missing correlation between infra and app metrics](#issue-016)
+  - [Issue #027: Offline RAG evaluation with RAGAS (Enhancement)](#issue-027)
 - [7. Session, State & Persistence](#7-session-state-persistence)
   - [Issue #017: Conversation state lost after pod restart](#issue-017)
   - [Issue #018: Duplicate messages in conversation history](#issue-018)
@@ -399,6 +400,24 @@ This document tracks issues encountered during development and deployment of the
 
 ---
 
+<a id="issue-027"></a>
+### Issue #027: Offline RAG evaluation with RAGAS (Enhancement)
+
+| Field | Details |
+|-------|---------|
+| **Status** | Resolved |
+| **Date** | 2025-10-15 |
+| **Severity** | Low (enhancement) |
+
+**Description:** Need a way to evaluate RAG quality offline (faithfulness, answer relevancy) on test sets or sampled production data, without adding latency to the request path.
+
+**Fix / workaround:**
+- Implemented **RAGAS** evaluation script: **`scripts/eval_ragas.py`**. Runs offline or in CI; consumes (user_input, retrieved_contexts, response, optional reference) samples; computes faithfulness and answer relevancy via RAGAS (LLM-based metrics).
+- Added `ragas` to `requirements.txt`. Sample data: built-in in script or `scripts/sample_ragas_data.json`; custom data via `--data path/to/samples.json`; results via `--output results.json`.
+- Documented in **Documentation/RAGAS_AND_FAITHFULNESS.md** (where RAGAS sits, how to run, relation to runtime faithfulness and observability). Architecture: **ARCHITECTURE_DESIGN.md** §7 (Implemented Code Artifacts) and §9 (Evals).
+
+---
+
 <a id="7-session-state-persistence"></a>
 ## 7. Session, State & Persistence
 
@@ -652,5 +671,6 @@ This document tracks issues encountered during development and deployment of the
 | 024 | Optimization | Throughput — vLLM + continuous batching | High | Resolved |
 | 025 | Optimization | Latency — KV cache / prefix caching for repeated queries | Medium | Resolved |
 | 026 | Optimization | Inference engine — TensorRT-LLM on A100 GPUs | High | Resolved |
+| 027 | Observability | Offline RAG evaluation with RAGAS (enhancement) | Low | Resolved |
 
 ---

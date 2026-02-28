@@ -822,6 +822,7 @@ The following components are **implemented** and form the core of the system:
 | 5c | **HITL (human-in-the-loop)** | **`src/hitl/`** module: `HitlHandler` ABC, `EscalationContext`; handlers: stub, ticket (create_support_ticket + pending list), email_notify. Supervisor **escalate_node** calls handler `on_escalate(ctx)`. Config: `HITL_ENABLED`, `HITL_HANDLER`, `HITL_EMAIL_TO`. **GET /hitl/pending**, **POST /hitl/pending/{session_id}/clear** for human queue. |
 | 6 | **Shared Service Interfaces** | RAG, session cache, conversation store: abstract interfaces with in-memory or minimal implementations. |
 | 7 | **Entrypoint / API** | FastAPI app: receives message → calls router → runs supervisor graph → returns response. **GraphQL** at `/graphql` for conversation history: queries `conversation(session_id, limit)` and `sessions(limit)`; see §5.5. **Health** at `GET /health` with AgentOps status (§5.4.1). **HITL** at `GET /hitl/pending` and `POST /hitl/pending/{session_id}/clear`. |
+| 8 | **RAG evaluation (RAGAS)** | Offline/CI only: **`scripts/eval_ragas.py`** runs RAGAS on (question, retrieved_contexts, response) samples; metrics: faithfulness, answer relevancy. Use built-in sample or `--data samples.json`; `--output results.json`. Requires `OPENAI_API_KEY`. See **Documentation/RAGAS_AND_FAITHFULNESS.md** and §9 (Evals). |
 
 Optional extensions (some as stubs or for future work):
 
@@ -926,9 +927,10 @@ flowchart LR
         RAG[RAG]
     end
 
-    subgraph Observability["Observability (Langfuse or LangSmith)"]
+    subgraph Observability["Observability - runtime and offline"]
         TR[Traces]
         SC[Scores]
+        RAGAS[RAGAS - offline]
         EV[Evals]
     end
 
@@ -938,11 +940,12 @@ flowchart LR
     AGT -->|faithfulness, confidence| SC
     TR --> EV
     SC -->|alert if low| EV
+    RAGAS -->|faithfulness, answer relevancy| EV
 ```
 
 - **Traces:** One trace per user request; spans for router, supervisor nodes, agent subgraph, RAG, each LLM call.
 - **Scores:** Attached to the agent response span: e.g. `faithfulness` (from **TFFaithfulnessScorer** or stub in supervisor aggregate), `confidence` (self-check or judge model). These are the **runtime measures** of correctness and hallucination.
-- **Evals:** Offline or scheduled: run datasets through the pipeline, compute faithfulness/relevance; compare over time. Langfuse/LangSmith both support running evals and storing results.
+- **Evals:** Offline or scheduled: run datasets through the pipeline, compute faithfulness/relevance; compare over time. Langfuse/LangSmith both support running evals and storing results. **RAGAS** (box in diagram) is implemented for **offline** RAG evaluation only: `scripts/eval_ragas.py` consumes (question, contexts, answer) samples and produces faithfulness, answer relevancy; not on the request path. See **Documentation/RAGAS_AND_FAITHFULNESS.md**.
 
 <a id="9-5-concrete-integration-points"></a>
 ### 9.5 Concrete Integration Points
@@ -1116,7 +1119,7 @@ Use **both**: Langfuse/LangSmith for “is the agent answering correctly?” and
 - **Section 5.5:** GraphQL conversation history — request flow (clients → /graphql → resolvers → ConversationStore) and schema shape (queries and types).
 - **Section 5.6:** RAG ingestion — pipeline (PDF dir → list → extract → chunk → Weaviate) and chunking strategy (boundaries, overlap).
 - **Section 7:** Implemented code artifacts — mapping from architecture boxes to concrete files.
-- **Section 9:** Runtime correctness and hallucination measurement; **hallucination handling flow** (diagram: agent → supervisor aggregate → TFFaithfulnessScorer → threshold → return or escalate); observability with Langfuse or LangSmith; where traces and scores are attached.
+- **Section 9:** Runtime correctness and hallucination measurement; **hallucination handling flow** (diagram: agent → supervisor aggregate → TFFaithfulnessScorer → threshold → return or escalate); **observability flow** (diagram: App → Traces, Scores; RAGAS → Evals); Langfuse or LangSmith for runtime; RAGAS for offline RAG evals.
 - **Section 10:** Infrastructure and performance observability — how to observe VM/pod memory, CPU, and other performance parameters (Prometheus + Grafana, AWS CloudWatch, or Azure Monitor).
 - **Section 12:** Inference optimization — how the **LLM / Inference** box is implemented and tuned: model quantization (16→4-bit via AWQ/LLM.int8 for ~75% memory reduction), dynamic/continuous batching with vLLM for higher throughput, KV prefix caching for repeated prefixes (latency reduction), and TensorRT-LLM on A100 GPUs for faster tokens/sec.
 

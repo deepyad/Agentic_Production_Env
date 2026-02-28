@@ -1,0 +1,18 @@
+[
+  {
+    "user_input": "What is the refund policy?",
+    "retrieved_contexts": [
+      "Refunds are allowed within 30 days of purchase. No exceptions after 30 days."
+    ],
+    "response": "Refunds are allowed within 30 days of purchase.",
+    "reference": "Refunds are allowed within 30 days of purchase."
+  },
+  {
+    "user_input": "What was my last invoice total?",
+    "retrieved_contexts": [
+      "Invoice #1001 dated 2024-01-15. Total: $250.00. Due in 30 days."
+    ],
+    "response": "Your last invoice total was $250.00.",
+    "reference": "The last invoice total is $250.00."
+  }
+]

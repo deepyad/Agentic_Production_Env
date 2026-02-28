@@ -2,9 +2,15 @@
 
 LangGraph + LLM multi-agent framework for chatbot-style customer support at scale. See `ARCHITECTURE_DESIGN.md` for the full design.
 
+## Environment
+
+**Use this conda env only:** `D:\MyDrive\Technology\AnacondaInstallation\env\genai_env`  
+(e.g. `conda activate D:\MyDrive\Technology\AnacondaInstallation\env\genai_env` before running or installing).
+
 ## Quick Start
 
 ```bash
+# Activate conda env (see Environment above), then:
 # Install dependencies
 pip install -r requirements.txt
 
@@ -100,6 +106,6 @@ When the supervisor escalates (low faithfulness score or agent-requested), the *
 
 **Infra:** Docker and Kubernetes assets are in `infra/` (Dockerfile, namespace, deployment, service, HPA, scripts). See `infra/README.md`.
 
-Replace router and RAG stubs with Weaviate in production (set `WEAVIATE_URL` and optionally use `WeaviateRAGService`). **Intent router:** default is keyword-based; set `USE_TF_INTENT=true` (and install `tensorflow`) to use a small Keras intent classifier. **Faithfulness scoring:** set `USE_TF_FAITHFULNESS=true` to use a TensorFlow-trained model (response vs RAG context) in the supervisor aggregate; if score &lt; threshold, escalates to HITL. **HITL:** `HITL_ENABLED`, `HITL_HANDLER` (stub \| ticket \| email), `HITL_EMAIL_TO`. **Inference backend:** default is OpenAI (`INFERENCE_BACKEND=openai`). For self-hosted (vLLM, TensorRT-LLM, or any OpenAI-compatible server), set `INFERENCE_BACKEND=self_hosted` and `INFERENCE_URL=http://your-server:8000`; optional `INFERENCE_API_KEY`. See `src/inference/backend.py`.
+Replace router and RAG stubs with Weaviate in production (set `WEAVIATE_URL` and optionally use `WeaviateRAGService`). **Intent router:** default is keyword-based; set `USE_TF_INTENT=true` (and install `tensorflow`) to use a small Keras intent classifier. **Faithfulness scoring:** set `USE_TF_FAITHFULNESS=true` to use a TensorFlow-trained model (response vs RAG context) in the supervisor aggregate; if score &lt; threshold, escalates to HITL. **HITL:** `HITL_ENABLED`, `HITL_HANDLER` (stub \| ticket \| email), `HITL_EMAIL_TO`. **Inference backend:** default is OpenAI (`INFERENCE_BACKEND=openai`). For self-hosted (vLLM, TensorRT-LLM, or any OpenAI-compatible server), set `INFERENCE_BACKEND=self_hosted` and `INFERENCE_URL=http://your-server:8000`; optional `INFERENCE_API_KEY`. See `src/inference/backend.py`. **RAG evaluation (RAGAS):** offline/CI only — `python scripts/eval_ragas.py` (see `RAGAS_AND_FAITHFULNESS.md` and `ARCHITECTURE_DESIGN.md` §7, §9).
 
 Env: `OPENAI_API_KEY`, `MCP_SERVER_URL` (required); `DEFAULT_MODEL`, `TOP_P`, `GUARDRAILS_ENABLED`, `WEAVIATE_*`, `USE_TF_INTENT`, `TF_INTENT_MODEL_PATH`, `USE_TF_FAITHFULNESS`, `TF_FAITHFULNESS_MODEL_PATH`, `HITL_*`, `INFERENCE_BACKEND`, `INFERENCE_URL`, `INFERENCE_API_KEY` (optional).
